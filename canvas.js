@@ -1,4 +1,4 @@
-import { HL_ALPHA, BOARD_W, PAGE_H } from './storage.js';
+import { HL_ALPHA, BOARD_W } from './storage.js';
 import { getStrokeOutline, inkPath } from './freehand.js';
 
 // Отклик пера на нажим. Половина нажима = номинальная толщина, а к краям
@@ -6,14 +6,22 @@ import { getStrokeOutline, inkPath } from './freehand.js';
 // толще. Так ведут себя кисти Procreate, линейный отклик рядом с ними «мёртвый».
 const PRESSURE_EASE = t => 0.45 * t + 0.55 * t * t * (3 - 2 * t);
 
-// Небольшой запас прокрутки ниже конца страницы, чтобы граница листа
-// (разделитель + фон приложения) была видна — лист ощущается ограниченным.
-const PAGE_END_GAP = 90;
-
 // Высота offscreen-полосы чернил в экранах. Три экрана — компромисс: камера
 // проходит целый экран в любую сторону без единой перерисовки штрихов, а
-// видеопамять растёт умеренно.
+// видеопамять растёт умеренно. На едином полотне это и есть окно прорисовки:
+// растеризуется не вся доска, а полоса вокруг текущего положения.
 const BAND_SCREENS = 3;
+
+// Окно загрузки картинок, в экранах в каждую сторону от видимой области.
+// Шире полосы чернил: декодирование картинки заметно дороже растеризации
+// штриха, и её лучше приготовить заранее, до того как она въедет в кадр.
+const IMAGE_WINDOW_SCREENS = 2;
+
+// Насколько далеко камера готова ехать за чужим штрихом (в экранах от видимой
+// области). Полотно длинное, и подводка без предела означала бы рывок в чужое
+// место через полдоски — ровно то, за что раньше отвечал автопереход на чужой
+// лист. Пишет рядом — камера подводится; пишет далеко — мы остаёмся у себя.
+const FOLLOW_REACH_SCREENS = 2;
 
 // Радиус круглых ручек изображения (удаление, «хват»). Зона нажатия шире —
 // она задана в tools.js рядом с попаданиями.
@@ -142,10 +150,11 @@ export class CanvasRenderer {
     this.fullRender();
   }
 
-  // Прокрутка ограничена высотой страницы (+ небольшой запас, чтобы был виден
-  // конец листа). Дальше низа страницы уходить нельзя.
+  // Полотно кончается на экран ниже последнего штриха: место, чтобы писать
+  // дальше, есть всегда, а пустоты «в никуда» — нет. Пустая доска
+  // прокручивается ровно на один экран вниз.
   maxCamera() {
-    return Math.max(0, PAGE_H - this.worldH + PAGE_END_GAP);
+    return Math.max(this.worldH, this.storage.contentBottom);
   }
 
   clampCamera() {
@@ -154,6 +163,10 @@ export class CanvasRenderer {
 
   focusWorldPoint(pt) {
     if (!pt || !Number.isFinite(pt.y)) return;
+
+    // За соседом, который пишет в другом конце полотна, не едем (см. выше).
+    const reach = this.worldH * FOLLOW_REACH_SCREENS;
+    if (pt.y < this.storage.cameraY - reach || pt.y > this.storage.cameraY + this.worldH + reach) return;
 
     const comfortableTop = this.storage.cameraY + this.worldH * 0.28;
     const comfortableBottom = this.storage.cameraY + this.worldH * 0.72;
@@ -474,34 +487,27 @@ export class CanvasRenderer {
   renderBack() {
     const ctx = this.backCtx;
     const camY = this.storage.cameraY;
-    const cur = this.storage.currentPageId;
+    // Окно загрузки едет за камерой: растр держат только картинки рядом с ней.
+    this.storage.syncImages(camY, camY + this.worldH, this.worldH * IMAGE_WINDOW_SCREENS);
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.back.width, this.back.height);
     ctx.restore();
 
     for (const im of this.storage.images) {
-      if (im.page !== cur) continue;                                          // только текущая страница
-      if (!im.img.complete || !im.img.naturalWidth) continue;
+      if (!im.img || !im.img.complete || !im.img.naturalWidth) continue;      // вне окна или ещё грузится
       if (im.y + im.h < camY || im.y > camY + this.worldH) continue;          // culling
       ctx.drawImage(im.img, im.x, im.y - camY, im.w, im.h);
     }
   }
 
-  strokeVisible(s) {
-    return s.page === this.storage.currentPageId
-      && s.maxY >= this.storage.cameraY - 4
-      && s.minY <= this.storage.cameraY + this.worldH + 4;
-  }
-
   strokeInBand(s) {
-    return s.page === this.storage.currentPageId
-      && s.maxY >= this.bandY - 4
-      && s.minY <= this.bandY + this.bandH + 4;
+    return s.maxY >= this.bandY - 4
+        && s.minY <= this.bandY + this.bandH + 4;
   }
 
   // Полоса покрывает камеру, если и верх, и низ видимой области лежат внутри
-  // отрисованного диапазона. Отдельно учитываем упор в начало страницы: там
+  // отрисованного диапазона. Отдельно учитываем упор в начало полотна: там
   // полоса не может уйти выше нуля, и это не повод считать её негодной.
   bandCoversCamera() {
     if (!this.bandValid) return false;
@@ -623,7 +629,6 @@ export class CanvasRenderer {
     // подсказка не нужна.
     const hov = this.hoverImage;
     if (hov && hov !== this.storage.selected
-        && hov.page === this.storage.currentPageId
         && this.storage.imageById(hov.id) === hov) {
       const k = this.scale;
       const x = hov.x * k;
@@ -773,9 +778,13 @@ export class CanvasRenderer {
 
   fullRender() {
     // То же для полного кадра: прямые вызовы fullRender() (инерция прокрутки,
-    // окончание штриха, смена страницы) раньше не снимали уже запланированный
+    // окончание штриха, удалённая правка) раньше не снимали уже запланированный
     // кадр, и доска рисовалась дважды за один animation frame.
     if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
+    // Содержимое могло сократиться (сосед стёр нижний штрих, пришёл свежий
+    // снимок доски), а вместе с ним и предел прокрутки — камера не должна
+    // остаться висеть за концом полотна.
+    this.clampCamera();
     this.rebuildInkCache();
     this.blitInk();
     if (this.activeStroke) this.drawStrokeTo(this.inkCtx, this.activeStroke, this.storage.cameraY);

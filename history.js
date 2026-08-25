@@ -338,11 +338,11 @@ export class HistoryManager {
   sendRestore(object, objectType) {
     let data;
     if (objectType === 'stroke') {
-      data = { id: object.id, type: 'stroke', page: object.page, tool: object.tool, color: object.color, size: object.size, points: object.points };
+      data = { id: object.id, type: 'stroke', tool: object.tool, color: object.color, size: object.size, points: object.points };
     } else if (objectType === 'note') {
-      data = { id: object.id, type: 'note', page: object.page, x: object.x, y: object.y, w: object.w, h: object.h, text: object.text };
+      data = { id: object.id, type: 'note', x: object.x, y: object.y, w: object.w, h: object.h, text: object.text };
     } else {
-      data = { id: object.id, type: 'image', page: object.page, src: object.src, x: object.x, y: object.y, w: object.w, h: object.h };
+      data = { id: object.id, type: 'image', src: object.src, x: object.x, y: object.y, w: object.w, h: object.h };
     }
     this.network.send({ type: 'restoreObject', payload: { objectId: object.id, data } });
   }

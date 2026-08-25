@@ -52,11 +52,9 @@ export class NotesManager {
   init() {
     document.getElementById('noteBtn')?.addEventListener('click', () => this.createNote());
 
-    // Изменения приходят тремя путями: сеть (notesChanged), смена листа
-    // (pageChanged) и перезагрузка снимка доски (pagesChanged из deserialize).
+    // Изменения приходят двумя путями: сеть и перезагрузка снимка доски —
+    // оба заканчиваются событием notesChanged.
     window.addEventListener('notesChanged', () => this.sync());
-    window.addEventListener('pageChanged', () => this.sync());
-    window.addEventListener('pagesChanged', () => this.sync());
 
     // Размер экрана поменялся — мировые размеры те же, а пиксели другие.
     window.addEventListener('resize', () => this.layoutAll());
@@ -76,13 +74,11 @@ export class NotesManager {
   // --- Создание и удаление ---
 
   createNote() {
-    const page = this.storage.currentPageId;
-    // Каждое следующее окно на листе смещается по диагонали: подряд созданные
-    // окна не ложатся друг на друга и их видно все сразу.
-    const step = this.storage.notes.filter(n => n.page === page).length % 5;
+    // Каждое следующее окно смещается по диагонали: подряд созданные окна не
+    // ложатся друг на друга и их видно все сразу.
+    const step = this.storage.notes.length % 5;
     const note = normalizeNote({
       id: generateUUID(),
-      page,
       x: 60 + step * 34,
       y: 0.08 + step * 0.035,
       w: NOTE_DEFAULT_W,
@@ -92,7 +88,7 @@ export class NotesManager {
     this.storage.notes.push(note);
     this.network.send({
       type: 'addNote',
-      payload: { noteId: note.id, page: note.page, x: note.x, y: note.y, w: note.w, h: note.h }
+      payload: { noteId: note.id, x: note.x, y: note.y, w: note.w, h: note.h }
     });
     this.history?.push({ type: 'add_note', id: note.id, note });
     this.sync();
@@ -112,11 +108,9 @@ export class NotesManager {
 
   sync() {
     if (!this.layer || !this.tpl) return;
-    const page = this.storage.currentPageId;
     const live = new Set();
 
     for (const note of this.storage.notes) {
-      if (note.page !== page) continue;              // окна принадлежат листу, как штрихи
       live.add(note.id);
       let el = this.els.get(note.id);
       if (!el) {
@@ -130,9 +124,9 @@ export class NotesManager {
 
     for (const [id, el] of this.els) {
       if (live.has(id)) continue;
-      // Окно могли удалить (или увести на другой лист) прямо под рукой: жест
-      // по исчезнувшему элементу уже не завершится сам, а незакрытый штрих
-      // навсегда заблокировал бы рисование в остальных окнах.
+      // Окно могли удалить прямо под рукой: жест по исчезнувшему элементу уже
+      // не завершится сам, а незакрытый штрих навсегда заблокировал бы
+      // рисование в остальных окнах.
       if (this.draw && this.draw.id === id) {
         clearInterval(this.draw.timer);
         this.draw = null;
@@ -281,8 +275,8 @@ export class NotesManager {
 
     e.preventDefault();
     e.stopPropagation();
-    // Своё письмо не должно уводить лист: соседи могут писать на других
-    // страницах, а мы заняты окном.
+    // Своё письмо не должно уводить полотно: сосед может писать где-то ещё,
+    // а мы заняты окном.
     this.network.pauseAutoFocus();
     // Признак «в руке перо» общий с листом: лежащая на планшете ладонь не
     // должна рисовать ни там, ни здесь.

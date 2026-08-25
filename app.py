@@ -43,14 +43,14 @@ VOICE_WS_TYPES = {"voiceHello", "voiceJoin", "voiceLeave", "voiceMute", "voiceSi
 # настоящие: одного кадра voiceFull хватило бы, чтобы у всех оборвался
 # разговор, а voiceRoster с огромным rev навсегда заклинил бы состав.
 VOICE_OUT_TYPES = {"voiceWelcome", "voiceRoster", "voiceFull"}
-DEFAULT_PAGE_ID = "page-1"   # id первой/легаси-страницы (совпадает с фронтендом)
 
 # Ограничения защиты и обслуживания памяти.
 MAX_WS_MESSAGE = 8 * 1024 * 1024   # кадр крупнее — почти наверняка мусор/атака
 BOARD_W = 1024.0                   # ширина доски в мировых px (совпадает с фронтендом)
 NOTE_MIN_W = 130.0                 # минимальный размер плавающего окна (мировые px)
 NOTE_MIN_H = 90.0
-PAGE_MAX_H = 8000.0                # предел размера окна по высоте (высота листа)
+NOTE_MAX_H = 4000.0                # предел размера плавающего окна по высоте
+PAGE_FOLD_GAP = 400.0              # зазор между листами старой доски при склейке в полотно
 SAVE_MAX_DELAY = 15.0              # доска сохраняется не реже, чем раз в 15 с активности
 BOARD_IDLE_TTL = 600.0             # доска без клиентов выгружается из памяти через 10 мин
 SEND_TIMEOUT = 5.0                 # медленный клиент не должен держать рассылку
@@ -145,7 +145,7 @@ def _num(v, default: float, lo: float, hi: float) -> float:
 def _note_geometry(src: dict, base: dict = None) -> dict:
     """Геометрия плавающего окна.
 
-    Окно приклеено к экрану, а не к листу, поэтому единицы у него смешанные:
+    Окно приклеено к экрану, а не к полотну, поэтому единицы у него смешанные:
     x, w, h — мировые px (доска всегда 1024 в ширину, значит доля экрана по
     горизонтали у всех одна), а y — доля видимой ВЫСОТЫ: высота окна браузера у
     всех разная, и только доля ставит окно в одну и ту же часть экрана.
@@ -156,12 +156,12 @@ def _note_geometry(src: dict, base: dict = None) -> dict:
         "x": _num(src.get("x", base.get("x")), 60.0, 0.0, BOARD_W - w),
         "y": _num(src.get("y", base.get("y")), 0.1, 0.0, 1.0),
         "w": w,
-        "h": _num(src.get("h", base.get("h")), NOTE_MIN_H * 2, NOTE_MIN_H, PAGE_MAX_H)
+        "h": _num(src.get("h", base.get("h")), NOTE_MIN_H * 2, NOTE_MIN_H, NOTE_MAX_H)
     }
 
 
 def _note_stroke(s: dict) -> dict:
-    """Штрих внутри окна: тот же формат, что и на листе, в координатах окна."""
+    """Штрих внутри окна: тот же формат, что и на полотне, в координатах окна."""
     return {
         "id": s.get("id") or s.get("strokeId") or "",
         "tool": s.get("tool", "pen"),
@@ -171,11 +171,114 @@ def _note_stroke(s: dict) -> dict:
     }
 
 
+LEGACY_PAGE_ID = "page-1"          # id первой страницы в досках версии-блокнота
+
+
+def _f(v) -> float:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if f != f else f
+
+
+def _raw_point_y(p) -> float:
+    if isinstance(p, (list, tuple)):
+        return _f(p[1]) if len(p) > 1 else 0.0
+    if isinstance(p, dict):
+        return _f(p.get("y"))
+    return 0.0
+
+
+def _fold_pages(data: dict) -> None:
+    """Схлопывает доску-блокнот в одно полотно.
+
+    Снимок версии со страницами приходит списком листов: у объекта есть page, а
+    его y отсчитан от верха СВОЕГО листа. Полотно одно, поэтому лист встаёт под
+    предыдущим — сдвиг равен сумме фактических высот всех листов до него плюс
+    зазор на каждый стык. Пустой лист занимает один зазор: копить пустоту в
+    тысячи px там, где никто ничего не нарисовал, незачем.
+
+    Ровно то же делает клиент над снимком из localStorage
+    (storage.js::foldPages). Правим data на месте: дальше про страницы не знает
+    уже никто, а первое же сохранение перепишет файл доски в новом формате.
+    """
+    strokes = [s for s in (data.get("strokes") or []) if isinstance(s, dict)]
+    images = [im for im in (data.get("images") or []) if isinstance(im, dict)]
+    notes = [n for n in (data.get("notes") or []) if isinstance(n, dict)]
+
+    order = []
+    known = set()
+
+    def track(page_id) -> str:
+        key = page_id if isinstance(page_id, str) and page_id else LEGACY_PAGE_ID
+        if key not in known:
+            known.add(key)
+            order.append(key)
+        return key
+
+    for pid in data.get("pages") or []:
+        if isinstance(pid, str) and pid:
+            track(pid)
+    for obj in strokes:
+        track(obj.get("page"))
+    for obj in images:
+        track(obj.get("page"))
+    data.pop("pages", None)
+
+    if len(order) < 2:
+        for obj in strokes + images + notes:
+            obj.pop("page", None)
+        return
+
+    # Высота листа — самая нижняя точка его содержимого.
+    bottom = {pid: 0.0 for pid in order}
+    for obj in strokes:
+        page = track(obj.get("page"))
+        size = _f(obj.get("size"))
+        for pt in obj.get("points") or []:
+            y = _raw_point_y(pt) + size
+            if y > bottom[page]:
+                bottom[page] = y
+    for obj in images:
+        page = track(obj.get("page"))
+        y = _f(obj.get("y")) + _f(obj.get("h"))
+        if y > bottom[page]:
+            bottom[page] = y
+
+    offset = {}
+    top = 0.0
+    for pid in order:
+        offset[pid] = top
+        top += bottom[pid] + PAGE_FOLD_GAP
+
+    for obj in strokes:
+        dy = offset.get(track(obj.get("page")), 0.0)
+        obj.pop("page", None)
+        if not dy:
+            continue
+        points = obj.get("points") or []
+        for i, pt in enumerate(points):
+            if isinstance(pt, list):
+                if len(pt) > 1:
+                    pt[1] = _raw_point_y(pt) + dy
+            elif isinstance(pt, tuple):
+                points[i] = [_f(pt[0]), _raw_point_y(pt) + dy] + list(pt[2:])
+            elif isinstance(pt, dict):
+                pt["y"] = _raw_point_y(pt) + dy
+    for obj in images:
+        dy = offset.get(track(obj.get("page")), 0.0)
+        obj.pop("page", None)
+        if dy:
+            obj["y"] = _f(obj.get("y")) + dy
+    for obj in notes:
+        obj.pop("page", None)
+
+
 class BoardState:
     def __init__(self, board_id: str):
         self.board_id = board_id
-        self.v = 1
-        self.pages = [DEFAULT_PAGE_ID]   # упорядоченный список id страниц
+        self.v = 2                       # 2 — единое полотно (1 — доска-блокнот)
         self.contentBottom = 0.0
         self.penColors = ["#1f1f42", "#dc2626", "#14992f"]
         self.hlColors = ["#fde047", "#7f46a4"]
@@ -193,15 +296,14 @@ class BoardState:
         self._snap_etag = None
 
     def load_from_dict(self, data: dict):
-        self.v = data.get("v", 1)
+        self.v = 2
         self.contentBottom = float(data.get("contentBottom", 0.0))
         self.penColors = data.get("penColors", ["#1f1f42", "#dc2626", "#14992f"])
         self.hlColors = data.get("hlColors", ["#fde047", "#7f46a4"])
         self.version = int(data.get("version", self.version))
 
-        # Список страниц. Легаси-доски (без pages) сводятся к одной странице.
-        pages = [p for p in data.get("pages", []) if isinstance(p, str) and p]
-        self.pages = pages if pages else [DEFAULT_PAGE_ID]
+        # Доска-блокнот приводится к полотну до разбора объектов.
+        _fold_pages(data)
 
         self.objects = {}
 
@@ -215,13 +317,11 @@ class BoardState:
             self.objects[sid] = {
                 "id": sid,
                 "type": "stroke",
-                "page": s.get("page", DEFAULT_PAGE_ID),
                 "tool": s.get("tool", "pen"),
                 "color": s.get("color", "#000000"),
                 "size": float(s.get("size", 2)),
                 "points": [self._decode_point(p) for p in s.get("points", [])]
             }
-            self._ensure_page(self.objects[sid]["page"])
 
         # Load legacy images
         images = data.get("images", [])
@@ -233,17 +333,15 @@ class BoardState:
             self.objects[iid] = {
                 "id": iid,
                 "type": "image",
-                "page": im.get("page", DEFAULT_PAGE_ID),
                 "src": im.get("src", ""),
                 "x": float(im.get("x", 0)),
                 "y": float(im.get("y", 0)),
                 "w": float(im.get("w", 100)),
                 "h": float(im.get("h", 100))
             }
-            self._ensure_page(self.objects[iid]["page"])
 
-        # Плавающие окна. На высоту содержимого листа не влияют: они приклеены к
-        # экрану, а их штрихи лежат во внутренних координатах окна.
+        # Плавающие окна. На высоту содержимого полотна не влияют: они приклеены
+        # к экрану, а их штрихи лежат во внутренних координатах окна.
         for n in data.get("notes", []):
             nid = n.get("id")
             if not nid:
@@ -252,12 +350,10 @@ class BoardState:
             obj = {
                 "id": nid,
                 "type": "note",
-                "page": n.get("page", DEFAULT_PAGE_ID),
                 "strokes": [_note_stroke(s) for s in n.get("strokes", [])]
             }
             obj.update(_note_geometry(n))
             self.objects[nid] = obj
-            self._ensure_page(obj["page"])
 
         # Пересчёт по фактическим объектам: чинит старые доски и вертикальную границу.
         self.recompute_content_bottom()
@@ -270,7 +366,6 @@ class BoardState:
             if obj["type"] == "stroke":
                 strokes_list.append({
                     "id": obj["id"],
-                    "page": obj.get("page", DEFAULT_PAGE_ID),
                     "tool": obj["tool"],
                     "color": obj["color"],
                     "size": obj["size"],
@@ -279,7 +374,6 @@ class BoardState:
             elif obj["type"] == "image":
                 images_list.append({
                     "id": obj["id"],
-                    "page": obj.get("page", DEFAULT_PAGE_ID),
                     "src": obj["src"],
                     "x": obj["x"],
                     "y": obj["y"],
@@ -289,7 +383,6 @@ class BoardState:
             elif obj["type"] == "note":
                 notes_list.append({
                     "id": obj["id"],
-                    "page": obj.get("page", DEFAULT_PAGE_ID),
                     "x": obj.get("x", 60.0),
                     "y": obj.get("y", 0.1),
                     "w": obj.get("w", NOTE_MIN_W * 2),
@@ -304,7 +397,6 @@ class BoardState:
                 })
         return {
             "v": self.v,
-            "pages": self.pages,
             "contentBottom": self.content_bottom(),
             "penColors": self.penColors,
             "hlColors": self.hlColors,
@@ -374,11 +466,6 @@ class BoardState:
         elif obj.get("type") == "image":
             self._bump_bottom(obj.get("y", 0.0) + obj.get("h", 0.0))
 
-    def _ensure_page(self, page_id: str):
-        # Страница объекта могла прийти раньше сообщения addPage — добавим её.
-        if page_id and page_id not in self.pages:
-            self.pages.append(page_id)
-
     def apply_operation(self, op_type: str, payload: dict):
         # contentBottom обновляется по месту: операции роста только двигают границу
         # вниз, а полный пересчёт нужен лишь там, где содержимое может уменьшиться.
@@ -387,13 +474,11 @@ class BoardState:
             obj = {
                 "id": sid,
                 "type": "stroke",
-                "page": payload.get("page", DEFAULT_PAGE_ID),
                 "tool": payload["tool"],
                 "color": payload["color"],
                 "size": float(payload["size"]),
                 "points": [self._decode_point(p) for p in payload.get("points", [])]
             }
-            self._ensure_page(obj["page"])
             self.objects[sid] = obj
             self._bump_object(obj)
         elif op_type == "appendPoints":
@@ -413,9 +498,7 @@ class BoardState:
         elif op_type == "restoreObject":
             oid = payload["objectId"]
             data = payload["data"]
-            if "page" not in data:
-                data["page"] = DEFAULT_PAGE_ID
-            self._ensure_page(data["page"])
+            data.pop("page", None)
             if data.get("type") == "stroke" and "points" in data:
                 data["points"] = [self._decode_point(p) for p in data["points"]]
             elif data.get("type") == "note":
@@ -444,29 +527,25 @@ class BoardState:
             obj = {
                 "id": iid,
                 "type": "image",
-                "page": payload.get("page", DEFAULT_PAGE_ID),
                 "src": payload["src"],
                 "x": float(payload["x"]),
                 "y": float(payload["y"]),
                 "w": float(payload["w"]),
                 "h": float(payload["h"])
             }
-            self._ensure_page(obj["page"])
             self.objects[iid] = obj
             self._bump_object(obj)
         elif op_type == "addNote":
-            # Плавающее окно. Границу содержимого листа оно не двигает: окно
+            # Плавающее окно. Границу содержимого полотна оно не двигает: окно
             # приклеено к экрану, а его штрихи — во внутренних координатах.
             nid = payload.get("noteId")
             if nid:
                 obj = {
                     "id": nid,
                     "type": "note",
-                    "page": payload.get("page", DEFAULT_PAGE_ID),
                     "strokes": []
                 }
                 obj.update(_note_geometry(payload))
-                self._ensure_page(obj["page"])
                 self.objects[nid] = obj
         elif op_type == "updateNote":
             obj = self.objects.get(payload.get("noteId"))
@@ -492,23 +571,6 @@ class BoardState:
             if obj is not None and obj.get("type") == "note":
                 sid = payload.get("strokeId")
                 obj["strokes"] = [s for s in obj.get("strokes", []) if s["id"] != sid]
-        elif op_type == "addPage":
-            page_id = payload.get("pageId")
-            after_id = payload.get("afterId")
-            if page_id and page_id not in self.pages:
-                if after_id in self.pages:
-                    self.pages.insert(self.pages.index(after_id) + 1, page_id)
-                else:
-                    self.pages.append(page_id)
-        elif op_type == "deletePage":
-            page_id = payload.get("pageId")
-            if page_id in self.pages and len(self.pages) > 1:
-                self.pages.remove(page_id)
-                self.objects = {
-                    oid: obj for oid, obj in self.objects.items()
-                    if obj.get("page", DEFAULT_PAGE_ID) != page_id
-                }
-                self.invalidate_content_bottom()
         elif op_type == "clearBoard":
             self.objects.clear()
             self.contentBottom = 0.0

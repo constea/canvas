@@ -12,7 +12,7 @@
 <link rel="alternate icon" href="/favicon.ico?v=3">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3">
 <meta name="theme-color" content="#eceeed">
-<!-- GSAP (локально) — плавные переходы между страницами. Классический скрипт
+<!-- GSAP (локально) — пружинный отклик кнопок. Классический скрипт
      грузится до отложенного модуля, поэтому window.gsap доступен в tools.js. -->
 <script src="/gsap.min.js"></script>
 <style>
@@ -41,23 +41,27 @@
     --control: 32px;
     /* Шкала отступов тулбаров.
        Считаем расстояния между «чернилами» — видимыми глифами, а не между
-       боксами кнопок: тап-цель у всех одна (--control), а глиф внутри разный
-       (точка пера 18px, скос маркера 12px, иконка 21px, залитая пилюля — во
-       всю ширину). Один и тот же gap давал бы на вид разные зазоры, поэтому
-       отступы корректируются на «воздух» внутри тап-цели — --tb-slack-*.
-       Три ступени, каждая заметно крупнее предыдущей:
+       боксами кнопок: тап-цель у всех одна (--control), а глиф внутри почти
+       один и тот же — плитка цвета 20px у пера и маркера, иконка 21px у
+       остальных инструментов. Один и тот же gap давал бы на вид разные
+       зазоры, поэтому отступы корректируются на «воздух» внутри тап-цели —
+       --tb-slack-*. Три ступени, каждая заметно крупнее предыдущей:
          сосед по набору ~15px → соседний набор ~22px → соседняя группа 28px. */
     --tb-pad: 4px;      /* внутренний отступ корпуса панели */
     --tb-item: 2px;     /* зазор между тап-целями внутри набора */
     --tb-set: 3px;      /* добавка на границе наборов внутри одной группы */
     --tb-group: 10px;   /* от разделителя до глифа — поровну с обеих сторон */
-    --tb-pen-control: 24px; /* компактнее только ряд цветов пера */
     /* Отступ от корпуса до глифа равен вертикальному: панель обтекает кнопки
        одинаково со всех сторон. */
     --tb-edge: calc(var(--tb-pad) + var(--tb-slack-dot));
-    --tb-slack-dot: calc((var(--control) - 18px) / 2);      /* точка пера / размер */
-    --tb-slack-pen: calc((var(--tb-pen-control) - 18px) / 2);
+    --tb-slack-dot: calc((var(--control) - var(--dot-size)) / 2); /* плитка цвета */
     --tb-slack-icon: calc((var(--control) - 21px) / 2);     /* иконка */
+
+    /* Плитка цвета пера и маркера. Форма — та же, что у иконок остальных
+       инструментов: скруглённый квадрат чуть меньше тап-цели, а не пилюля.
+       Отличает инструменты не форма, а заливка (см. .swatch .dot). */
+    --dot-size: 20px;
+    --dot-radius: 5px;
 
     /* Верхняя строка интерфейса складывается из трёх величин, и обе внешние —
        именно те зазоры, которые видно: от края окна до панели и от панели до
@@ -88,9 +92,9 @@
     --scroll-w: 10px;
     --scroll-gap: 6px;                                   /* полоса → кромка листа */
     --scroll-lane: calc(var(--scroll-w) + var(--scroll-gap));
-    /* Кромки листа: левая — она же левый край панели страниц, правая — правый
-       край toolbar. Панели и бумага держат общую вертикаль, дорожка прокрутки
-       проходит снаружи от них справа. */
+    /* Кромки листа: правая — она же правый край toolbar. Панели и бумага
+       держат общую вертикаль, дорожка прокрутки проходит снаружи от них
+       справа. */
     --paper-left: var(--side-reserve);
     --paper-right: calc(var(--side-reserve) + var(--scroll-lane));
     font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -273,7 +277,6 @@
   }
 
   .group.colors { --tb-slack: var(--tb-slack-dot); }
-  .group.pen-colors { --tb-slack: var(--tb-slack-pen); }
   .group.tools { --tb-slack-end: 0px; }  /* справа — единая полоса толщины */
   .group.status { --tb-slack: 0px; }
 
@@ -290,7 +293,7 @@
 
   /* Начало нового набора внутри группы: ступень заметнее, чем между соседями,
      но мельче, чем через разделитель. Ею же отодвигаются разрушающие действия
-     (очистить страницу, удалить страницу) — чтобы не попасть в них промахом. */
+     (очистить доску) — чтобы не попасть в них промахом. */
   .set-start {
     margin-inline-start: var(--tb-set);
   }
@@ -363,11 +366,6 @@
     height: 24px;
   }
 
-  #delPageBtn .m-icon {
-    width: 23px;
-    height: 23px;
-  }
-
   #exportBtn .m-icon {
     width: 17px;
     height: 17px;
@@ -392,7 +390,12 @@
     fill: rgba(255, 255, 255, 0.62);
   }
 
-  .btn:hover {
+  /* Перо и маркер — такие же кнопки инструмента, как ластик или лассо:
+     наведение и выбор показываются тем же корпусом, а не ореолом вокруг
+     цвета. Иначе половина шапки подсвечивалась бы одним способом, половина
+     другим. */
+  .btn:hover,
+  .swatch:hover {
     background: rgba(21, 21, 21, 0.055);
   }
 
@@ -403,7 +406,8 @@
     outline-offset: 2px;
   }
 
-  .btn.on {
+  .btn.on,
+  .swatch.sel {
     border-color: var(--accent-line);
     background: var(--accent-soft);
     box-shadow: inset 0 0 0 1px rgba(16, 163, 127, 0.08);
@@ -424,14 +428,11 @@
     color: var(--danger);
   }
 
+  /* Корпус свотча ничем не отличается от корпуса кнопки инструмента: та же
+     тап-цель --control, то же скругление, та же прозрачная рамка под
+     подсветку выбора. */
   .swatch {
     padding: 0;
-  }
-
-  /* Цвета пера собраны плотнее: видимый зазор между 18px-точками уменьшается
-     с 16 до 8px, а высота зоны нажатия остаётся общей для всего toolbar. */
-  #penColors .swatch {
-    width: var(--tb-pen-control)+2px;
   }
 
   /* Три толщины живут в общей полосе. Сегменты сохраняют исходную форму,
@@ -521,40 +522,36 @@
     opacity: 0;
   }
 
+  /* Плитка цвета — тот же скруглённый квадрат, что рисуют иконки остальных
+     инструментов, и с той же тенью: перо и маркер стоят в одном ряду с
+     ластиком и лассо и не должны выглядеть предметом другой природы.
+     Цвет приходит с кнопки в --dot-c (его задаёт tools.js). */
   .swatch .dot {
-    width: 25px;
-    height: 20px;
-    border-radius: 9px;
+    width: var(--dot-size);
+    height: var(--dot-size);
+    border-radius: var(--dot-radius);
     border: 1px solid rgba(0, 0, 0, 0.16);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+    background: var(--dot-c);
+    box-shadow:
+      0 1px 1px rgba(0, 0, 0, 0.18),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.45);
     transition: box-shadow 120ms ease, transform 120ms ease;
   }
 
-  /* Скос маркера узкий — 12px против 18px у точки пера. При одинаковых боксах
-     пара «жёлтый/фиолетовый» разъехалась бы на вид сильнее, чем расходятся
-     целые группы, поэтому лишние 4px «воздуха» срезаны с бокса: цвета остаются
-     собранными, но не слипаются. Высота тап-цели —
-     а с ней и удобство попадания сверху пером — не меняется. */
-  .swatch.hl {
-    width: calc(var(--control) - 4px);
-  }
-
+  /* Раз форма у пера и маркера общая, различает их заливка. Перо кладёт
+     сплошной цвет, маркер — ступени: три полосы одного цвета разной плотности,
+     как накладывающиеся друг на друга полупрозрачные проходы маркера. Границы
+     ступеней резкие (две позиции у каждого стопа), поэтому это читается как
+     ступенчатая шкала, а не как обычная растяжка.
+     Правило целиком отваливается там, где нет color-mix, и остаётся сплошная
+     заливка выше — маркер тогда просто выглядит как перо, а не как пустая
+     плитка. */
   .swatch.hl .dot {
-    width: 25px;
-    height: 20px;
-    border-radius: 8px;
-  }
-
-  .swatch:hover .dot {
-    box-shadow:
-      0 0 0 3px rgba(21, 21, 21, 0.055),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.45);
-  }
-
-  .swatch.sel .dot {
-    box-shadow:
-      0 0 0 3px var(--accent-line),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--dot-c) 34%, #fff) 0 34%,
+      color-mix(in srgb, var(--dot-c) 66%, #fff) 34% 67%,
+      var(--dot-c) 67% 100%);
   }
 
   .presence {
@@ -595,10 +592,9 @@
   /* --- Разговор --------------------------------------------------------- */
 
   /* Третья панель того же набора: корпус, высота и радиус повторяют .toolbar и
-     .pagebar буква в букву — иначе она читалась бы как чужая деталь поверх
-     доски. Сверху по центру: разговор не принадлежит ни страницам слева, ни
-     инструментам справа, и середина — единственное место, где он никого не
-     теснит. Внутри — обычная .group, поэтому вся арифметика отступов
+     буква в букву — иначе она читалась бы как чужая деталь поверх доски.
+     Сверху по центру: разговор не принадлежит инструментам справа, и середина —
+     единственное место, где он никого не теснит. Внутри — обычная .group, поэтому вся арифметика отступов
      («воздух» внутри тап-цели, края к корпусу) достаётся ей даром. */
   .voicebar {
     order: 2;
@@ -610,16 +606,15 @@
        body держит touch-action: none. Теперь место уступает ряд точек: он
        украшение, а не управление. Кнопки не сжимаются никогда (см. ниже). */
     /* Сжиматься панели разрешено — но только за счёт ряда точек (см. ниже).
-       На узком телефоне с десятью страницами места ей иначе не хватает, и
-       кнопки уезжали бы за край экрана: «положить трубку» становилась
-       недосягаемой. */
+       На узком телефоне места ей иначе не хватает, и кнопки уезжали бы за край
+       экрана: «положить трубку» становилась недосягаемой. */
     flex: 0 1 auto;
     /* Без этого сжатие не начнётся вовсе: у флекс-элемента собственный
        минимум по умолчанию равен содержимому, а содержимое тут — тот самый
        ряд точек, который и должен уступать место. */
     min-width: 0;
     /* Обе автополя разом: свободное место делится поровну слева и справа —
-       это и есть «по центру» между страницами и инструментами. */
+       это и есть «по центру» полосы. */
     margin-inline: auto;
     width: max-content;
     max-width: 100%;
@@ -839,7 +834,7 @@
     position: fixed;
     z-index: 12;
     /* Дорожка идёт по столу вдоль правой кромки листа и повторяет его высоту
-       ровно: положение бегунка читается как окно, вырезанное из страницы. */
+       ровно: положение бегунка читается как окно, вырезанное из полотна. */
     top: var(--top-reserve);
     right: var(--side-reserve);
     bottom: var(--bottom-reserve);
@@ -1050,106 +1045,6 @@
     border-bottom-right-radius: 3px;
   }
 
-  /* Панель страниц (блокнот) — слева, в стиле основного toolbar. */
-  .pagebar {
-    order: 1;
-    flex: 0 0 auto;
-    width: max-content;
-    max-width: 100%;
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-    padding: var(--tb-pad);
-    border: 1px solid var(--line);
-    border-radius: 20px;
-    background: var(--panel);
-    box-shadow: var(--shadow);
-    backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
-  }
-
-  .page-indicator {
-    /* Счётчик залит фоном во всю ширину — «воздуха» внутри бокса у него нет,
-       поэтому зазор до стрелок добирается собственным полем. */
-    margin-inline: calc(var(--tb-item) + var(--tb-slack-icon));
-    min-width: 44px;
-    min-height: var(--control);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 10px;
-    border-radius: 999px;
-    background: rgba(21, 21, 21, 0.045);
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    user-select: none;
-  }
-
-  .page-indicator.pulse {
-    animation: page-pulse 0.45s ease;
-  }
-
-  @keyframes page-pulse {
-    from { transform: scale(1.34); }
-    to { transform: scale(1); }
-  }
-
-  /* На последнем листе стрелка «вперёд» не гаснет, а заводит новый лист:
-     об этом говорит верхний индекс «+» у её кончика. Отдельной кнопки
-     «добавить страницу» в блокноте нет — эта роль ушла на стрелку.
-     Крестик нарисован двумя полосками, а не глифом шрифта: так он остаётся
-     чётким на любом DPI и совпадает по скруглению со штрихами иконок. */
-  #nextPageBtn {
-    position: relative;
-  }
-
-  .page-next-plus {
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 8px;
-    height: 8px;
-    opacity: 0;
-    transform: scale(0.4);
-    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
-    pointer-events: none;
-    transition: opacity 140ms ease, transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-
-  .page-next-plus::before,
-  .page-next-plus::after {
-    content: "";
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    border-radius: 999px;
-    background: var(--accent);
-    transform: translate(-50%, -50%);
-  }
-
-  .page-next-plus::before {
-    width: 8px;
-    height: 2px;
-  }
-
-  .page-next-plus::after {
-    width: 2px;
-    height: 8px;
-  }
-
-  #nextPageBtn.can-add .page-next-plus {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  /* Индекс подхватывает подъём иконки на наведении — они читаются как один глиф. */
-  #nextPageBtn.can-add:hover .page-next-plus {
-    transform: translateY(-1px);
-  }
-
   /* --- Быстрая панель ---
      Плавающая палитра на шесть ячеек: сверху ластик и два маркера, снизу три
      пера — те же кнопки, что и в основном toolbar, просто под рукой. Панель
@@ -1255,8 +1150,8 @@
     outline-offset: 1px;
   }
 
-  /* Шеврон нарисован двумя гранями квадрата — как «плюс» у стрелки страниц:
-     чётко на любом DPI и скругляется теми же 1.6px, что штрихи иконок. */
+  /* Шеврон нарисован двумя гранями квадрата, а не глифом шрифта: чётко на
+     любом DPI и скругляется теми же 1.6px, что штрихи иконок. */
   .quick-chevron {
     width: 6px;
     height: 6px;
@@ -1317,11 +1212,8 @@
     grid-row: 2;
   }
 
-  .quickbar .quick-body .swatch .dot {
-    width: 28px;
-    height: 23px;
-    border-radius: 9px;
-  }
+  /* Плитка цвета здесь та же, что в шапке: рядом в этой же панели стоит
+     ластик, и его иконка задаёт масштаб глифа — 21px в ячейке 34px. */
 
   /* Узлы сетки проступают только на время перетаскивания: пока панель несут,
      видно, куда именно она может встать, а в покое поле пустое. Точки стоят
@@ -1340,86 +1232,6 @@
     opacity: 0.45;
   }
 
-  /* Резинка листа: пока прокрутку продолжают за конец страницы, лист (и его
-     край) отъезжают на --pull, а отпущенный жест возвращает их пружиной. */
-  .stage.pulling > canvas,
-  .stage.pulling .page-edge {
-    transform: translateY(var(--pull, 0px));
-  }
-
-  /* Край листа — тонкая линия с мягкой тенью: видно, что бумага кончилась
-     и её тянут за край. Позицию задаёт JS, она едет вместе с холстом. */
-  .page-edge {
-    position: absolute;
-    z-index: 4;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-      rgba(21, 21, 21, 0) 0%,
-      rgba(21, 21, 21, 0.15) 14%,
-      rgba(21, 21, 21, 0.15) 86%,
-      rgba(21, 21, 21, 0) 100%);
-    box-shadow: 0 7px 16px -7px rgba(0, 0, 0, 0.26);
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  /* Индикатор продолжения: всплывает у края листа, когда прокрутку продолжают
-     дальше конца страницы, и заполняется кольцом, пока усилие удерживают. */
-  .page-hint {
-    position: fixed;
-    z-index: 25;
-    left: 50%;
-    bottom: calc(max(18px, env(safe-area-inset-bottom)) + 58px);
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 6px 14px 6px 6px;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    background: var(--panel);
-    box-shadow: var(--shadow);
-    backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
-    color: var(--text);
-    font-size: 13px;
-    font-weight: 570;
-    white-space: nowrap;
-    opacity: 0;
-    transform: translate(-50%, 14px);
-    pointer-events: none;
-  }
-
-  .page-hint.top {
-    bottom: auto;
-    top: calc(var(--top-reserve) + 14px);
-  }
-
-  .page-hint svg {
-    display: block;
-    width: 26px;
-    height: 26px;
-    overflow: visible;
-  }
-
-  .hint-plus {
-    display: none;
-  }
-
-  .page-hint.create .hint-plus {
-    display: block;
-  }
-
-  .page-hint.create .hint-arrow {
-    display: none;
-  }
-
-  .page-hint.top .hint-arrow {
-    transform: rotate(180deg);
-    transform-origin: 12px 12px;
-  }
-
   /* Фолбэк пружинного «попа» при нажатии, если GSAP не загрузился. */
   .tap-pop {
     animation: tap-pop-kf 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -1428,30 +1240,6 @@
   @keyframes tap-pop-kf {
     from { transform: scale(0.8); }
     to { transform: scale(1); }
-  }
-
-  /* Тулбар и блокнот делят верхнюю строку, и оба имеют фиксированную ширину.
-     Порог — момент, когда они перестают помещаться рядом: дальше блокнот
-     уезжает вниз-влево, иначе он наезжает на цвета пера. */
-  /* Порог был рассчитан на две панели в верхней полосе. Их стало три, и на
-     окне около тысячи пикселей начавшийся разговор переставал помещаться:
-     место уступала шапка инструментов — молча срезала себе правый край вместе
-     с «очистить» и счётчиком участников, причём доскроллить до них пальцем
-     нельзя (body держит touch-action: none). Панель страниц уезжает вниз
-     раньше — у неё внизу давно есть законное место, и там она никому не мешает,
-     а разговор остаётся сверху по центру, как и задумано.
-     1060 = самая широкая шапка (622) + самая широкая панель разговора на шестерых
-     (157) + панель страниц (190) + два зазора (24) + поля листа (32), с запасом. */
-  @media (max-width: 1060px) {
-    /* Блокнот всплывает над листом, а не садится на его кромку: нижняя граница
-       бумаги и запечённый угол остаются видны. */
-    .pagebar {
-      position: fixed;
-      z-index: 20;
-      top: auto;
-      left: var(--paper-left);
-      bottom: calc(var(--bottom-reserve) + 12px);
-    }
   }
 
   @media (max-width: 760px) {
@@ -1474,27 +1262,13 @@
       font-size: 12px;
     }
 
-
-    /* На узких экранах уводим панель страниц вниз-влево, чтобы не пересекаться
-       с основным toolbar сверху. */
-    .pagebar {
-      bottom: calc(var(--bottom-reserve) + 10px);
-    }
-
     /* Наверху на телефоне места нет вовсе — шапка инструментов занимает всю
-       ширину. Разговор уходит вниз-вправо, ровно напротив страниц: нижняя
-       полоса читается как «страницы слева, разговор справа». */
-    /* Наверху на телефоне места нет вовсе — шапка инструментов занимает всю
-       ширину. Поэтому вниз уезжает ВСЯ полоса целиком: страницы слева,
-       разговор справа. Двумя независимыми position: fixed панелями это делать
-       нельзя — они ничего не знают друг о друге и в разговоре втроём на
-       320-360 px наезжают одна на другую (панель страниц рисуется поверх и
-       забирает касания). Во флекс-полосе перекрытие невозможно по построению:
-       не хватило места — сжимается ряд точек. */
+       ширину. Поэтому полоса уезжает вниз, а разговор остаётся в ней по
+       центру: его автополя (margin-inline: auto) делят свободное место
+       поровну. */
     .chrome-band {
       top: auto;
       bottom: calc(var(--bottom-reserve) + 10px);
-      justify-content: space-between;
     }
 
     /* Шапка инструментов покидает полосу и остаётся наверху — ровно там же,
@@ -1506,31 +1280,12 @@
       right: var(--paper-right);
       max-width: calc(100vw - var(--paper-left) - var(--paper-right));
     }
-
-    /* Страницы возвращаются в полосу: теперь она сама внизу. */
-    .pagebar {
-      position: static;
-    }
-
-    /* Прижат к правому краю полосы через space-between, автополя тут мешают. */
-    .voicebar {
-      margin-inline: 0;
-    }
-
-    /* Индикатор не должен налезать ни на toolbar сверху, ни на панель страниц снизу. */
-    .page-hint {
-      bottom: calc(max(8px, env(safe-area-inset-bottom)) + 62px);
-    }
-
-    .page-hint.top {
-      top: calc(var(--top-reserve) + 10px);
-    }
   }
   /* Телефон: инструменты правки уходят с экрана целиком.
      Рисовать пальцем по листу шириной с ладонь всё равно нечем, а шапка из
      шести цветов, четырёх толщин, лассо, вставки и истории занимала там всю
      верхнюю полосу и продолжала отъедать место у бумаги. На телефоне доска
-     остаётся тем, чем она на телефоне и полезна: посмотреть страницы и
+     остаётся тем, чем она на телефоне и полезна: посмотреть доску и
      поговорить. Правят её с планшета и с десктопа.
 
      Порог не сводится к одной ширине. Телефон в альбомной ориентации — это
@@ -1572,7 +1327,6 @@
     <canvas id="back"></canvas>
     <canvas id="ink"></canvas>
     <canvas id="overlay"></canvas>
-    <div id="pageEdge" class="page-edge" aria-hidden="true"></div>
     <div id="notes" class="notes"></div>
     <div id="eraserCursor" class="eraser-cursor" aria-hidden="true"></div>
     <div id="vbar" class="vbar" aria-hidden="true">
@@ -1580,12 +1334,12 @@
     </div>
   </section>
 
-  <!-- Порядок в разметке — шапка, разговор, страницы; порядок на экране задаёт
+  <!-- Порядок в разметке — шапка, затем разговор; порядок на экране задаёт
        CSS (order). Так последовательность обхода с клавиатуры остаётся прежней:
        сначала инструменты рисования, которыми пользуются постоянно. -->
   <div class="chrome-band">
   <header class="toolbar" aria-label="Инструменты доски">
-    <div class="group colors pen-colors" aria-label="Цвета ручки">
+    <div class="group colors" aria-label="Цвета ручки">
       <span class="group-label">Перо</span>
       <div id="penColors" class="swatches" data-swatches="pen"></div>
     </div>
@@ -1612,7 +1366,7 @@
       <button id="imgBtn" class="btn icon" type="button" aria-label="Добавить изображение" title="Добавить изображение">
         <!--icon:image-->
       </button>
-      <button id="exportBtn" class="btn icon" type="button" aria-label="Скачать PDF (все страницы)" title="Скачать PDF (все страницы)">
+      <button id="exportBtn" class="btn icon" type="button" aria-label="Скачать PDF" title="Скачать PDF">
         <!--icon:export-->
       </button>
     </div>
@@ -1624,7 +1378,7 @@
       <button id="redoBtn" class="btn icon" type="button" title="Повторить (Ctrl/Cmd+Y)" disabled aria-label="Повторить">
         <!--icon:redo-->
       </button>
-      <button id="clearBtn" class="btn icon danger set-start" type="button" aria-label="Очистить страницу" title="Очистить страницу">
+      <button id="clearBtn" class="btn icon danger set-start" type="button" aria-label="Очистить доску" title="Очистить доску">
         <!--icon:clear-->
       </button>
     </div>
@@ -1640,8 +1394,8 @@
 
   <!-- Разговор живёт своей панелью, а не в шапке инструментов: рисование и
        разговор — разные занятия, и держать «положить трубку» вплотную к выбору
-       пера незачем. Корпус тот же, что у шапки и у панели страниц, поэтому
-       третья панель читается как часть одного набора, а не как чужая деталь. -->
+       пера незачем. Корпус тот же, что у шапки инструментов, поэтому вторая
+       панель читается как часть одного набора, а не как чужая деталь. -->
   <nav id="voicebar" class="voicebar" aria-label="Разговор">
     <div class="group" aria-label="Управление разговором">
       <!-- Точки участников разговора: цвет тот же, что у курсора этого человека,
@@ -1671,25 +1425,6 @@
       <span id="voiceStatus" class="sr-only" role="status" aria-live="polite"></span>
     </div>
   </nav>
-
-  <nav id="pagebar" class="pagebar" aria-label="Страницы">
-    <div class="group" aria-label="Навигация по страницам">
-      <button id="prevPageBtn" class="btn icon" type="button" aria-label="Предыдущая страница" title="Предыдущая страница ([)">
-        <!--icon:page-prev-->
-      </button>
-      <span id="pageIndicator" class="page-indicator" aria-live="polite" title="Текущая страница / всего">1/1</span>
-      <button id="nextPageBtn" class="btn icon" type="button" aria-label="Следующая страница" title="Следующая страница (])">
-        <!--icon:page-next-->
-        <span class="page-next-plus" aria-hidden="true"></span>
-      </button>
-    </div>
-
-    <div class="group" aria-label="Управление страницами">
-      <button id="delPageBtn" class="btn icon" type="button" aria-label="Удалить страницу" title="Удалить страницу">
-        <!--icon:page-del-->
-      </button>
-    </div>
-  </nav>
   </div>
 
   <!-- Быстрая панель: та же палитра, что в toolbar, но под рукой — плавает над
@@ -1714,11 +1449,6 @@
 
   <!-- Поле посадочных мест быстрой панели: видно только пока её несут. -->
   <div id="quickGridHint" class="quick-grid-hint" aria-hidden="true"></div>
-
-  <div id="pageHint" class="page-hint" aria-hidden="true">
-    <!--icon:page-hint-->
-    <span id="pageHintLabel" class="page-hint-label">Новая страница</span>
-  </div>
 
   <input id="fileInput" class="sr-only" type="file" accept="image/*">
   <!-- Приёмники удалённого звука. Именно .sr-only, а не display:none: скрытый
@@ -1771,9 +1501,6 @@ import { VoiceManager } from './voice.js';
   // инструментами, но к экрану они приклеены, а не к бумаге, поэтому камера их
   // не двигает.
   const notes = new NotesManager(storage, renderer, network, history, tools);
-  // Участник ушёл на другой лист и начал там писать — уводим за ним остальных.
-  network.onRemotePage = (pageId, point) => tools.followRemotePage(pageId, point);
-
   // Разговор поверх доски: свой полносвязный меш, но сигналинг едет тем же
   // сокетом и мимо состояния доски. Подключается ДО network.init(): состав
   // разговора приходит сразу за presence, ещё до первого нарисованного штриха.

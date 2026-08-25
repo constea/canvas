@@ -8,22 +8,13 @@ const EPHEMERAL_TYPES = new Set(['cursorMove', 'cursorLeave']);
 // одинаковым clientId (sessionStorage копируется в дублированную вкладку).
 const VOICE_TYPES = new Set(['voiceWelcome', 'voiceRoster', 'voiceSignal', 'voiceFull']);
 
-// Автопереход на чужой лист: участник ушёл на другую страницу и начал там
-// писать — остальные переходят за ним. COOLDOWN гасит «пинг-понг», когда двое
-// одновременно пишут на разных листах. PAUSE — время, на которое собственное
-// действие (перелистнул сам, пишет сам) отключает автопереход: пока человек
-// занят своим листом, его туда-сюда не бросает.
-const PAGE_FOLLOW_COOLDOWN = 1500;
-const PAGE_FOLLOW_PAUSE = 10000;
-
 export class NetworkManager {
   constructor(storage, onMessageReceived, onRemoteFocus) {
     this.storage = storage;
     this.onMessageReceived = onMessageReceived; // callback to trigger rerender
     this.onRemoteFocus = onRemoteFocus;
     this.onRemoteCursor = null;
-    this.onRemotePage = null;
-    // Разговор подключается теми же хуками, что и курсоры с листами.
+    // Разговор подключается тем же хуком, что и курсоры соседей.
     this.onVoiceMessage = null;
     this.onSocketOpen = null;
 
@@ -47,7 +38,6 @@ export class NetworkManager {
     this.activeClientId = null;
     this.activeStrokeId = null;
     this.focusPausedUntil = 0;
-    this.pageFollowPausedUntil = 0;
     this.remoteWritingClients = new Set();
     this.remoteStrokeLastPoint = new Map();
     this.remoteCursorTimers = new Map();
@@ -73,33 +63,8 @@ export class NetworkManager {
     this.focusPausedUntil = Math.max(this.focusPausedUntil, Date.now() + ms);
   }
 
-  // Автопереход на чужой лист сам переключает страницу, а enterPage гасит
-  // автопрокрутку — на новом листе она нужна сразу, чтобы подвести камеру
-  // к штриху. Снимать паузу безопасно: переход не начинается, пока она идёт.
   resumeAutoFocus() {
     this.focusPausedUntil = 0;
-  }
-
-  pausePageFollow(ms = PAGE_FOLLOW_PAUSE) {
-    this.pageFollowPausedUntil = Math.max(this.pageFollowPausedUntil, Date.now() + ms);
-  }
-
-  // Участник перешёл на другой лист и начал там писать — уводим за ним и нас.
-  // Только на начало штриха: продолжение (appendPoints) уже не утаскивает
-  // того, кто тем временем сам перелистнул страницу.
-  followRemotePage(pageId, point, clientId, strokeId) {
-    if (!this.onRemotePage || !pageId) return;
-    if (pageId === this.storage.currentPageId) return;
-    if (this.currentStrokeId) return;   // незакрытый свой штрих — лист из-под пера не уводим
-
-    const now = Date.now();
-    if (now < this.focusPausedUntil) return;        // сами рисуем или прокручиваем
-    if (now < this.pageFollowPausedUntil) return;   // сами перелистнули / только что перешли
-
-    this.pausePageFollow(PAGE_FOLLOW_COOLDOWN);
-    this.activeClientId = clientId || null;
-    this.activeStrokeId = strokeId || null;
-    this.onRemotePage(pageId, point);
   }
 
   focusRemotePoint(point, clientId, strokeId) {
@@ -261,7 +226,7 @@ export class NetworkManager {
     this.lastCursorPoint = { x: point.x, y: point.y };
     this.sendEphemeral({
       type: 'cursorMove',
-      payload: { x: point.x, y: point.y, page: this.storage.currentPageId }
+      payload: { x: point.x, y: point.y }
     });
   }
 
@@ -322,20 +287,16 @@ export class NetworkManager {
 
   // --- Buffering outgoing points (30-60 FPS) ---
 
-  startStroke(strokeId, tool, color, size, startPoint, page) {
+  startStroke(strokeId, tool, color, size, startPoint) {
     this.currentStrokeId = strokeId;
     this.bufferedPoints = [this.encodePoint(startPoint)];
     this.lastCursorPoint = null;
-    // Пишем сами — значит, работаем на этом листе: чужое письмо на другой
-    // странице не должно нас отсюда уводить, пока мы не отложим перо.
-    this.pausePageFollow();
 
     // Broadcast immediately the beginStroke event
     this.send({
       type: 'beginStroke',
       payload: {
         strokeId: strokeId,
-        page: page,
         tool: tool,
         color: color,
         size: size,
@@ -423,12 +384,6 @@ export class NetworkManager {
     if (EPHEMERAL_TYPES.has(msg.type)) {
       if (msg.type === 'cursorMove' && !this.remoteWritingClients.has(msg.client)) {
         const payload = msg.payload || {};
-        // Курсор с другой страницы не показываем на текущей.
-        if (payload.page && payload.page !== this.storage.currentPageId) {
-          this.clearRemoteCursorDelay(msg.client);
-          this.setRemoteCursor(msg.client, null);
-          return;
-        }
         const point = {
           x: Number(payload.x),
           y: Number(payload.y)
@@ -455,25 +410,18 @@ export class NetworkManager {
         this.setRemoteCursor(msg.client, null);
         const stroke = {
           id: payload.strokeId,
-          page: payload.page || this.storage.currentPageId,
           tool: payload.tool,
           color: payload.color,
           size: payload.size,
           points: pts
         };
-        this.storage.ensurePage(stroke.page);
         this.storage.computeBBox(stroke);
         this.storage.strokes.push(stroke);
         this.storage.extendBottom(stroke);
         const lastPt = pts[pts.length - 1];
         if (lastPt) this.remoteStrokeLastPoint.set(msg.client, lastPt);
-        // Штрих на нашей странице — подводим к нему камеру; на другой —
-        // переходим на неё вслед за участником.
-        if (stroke.page === this.storage.currentPageId) {
-          this.focusRemotePoint(lastPt, msg.client, payload.strokeId);
-        } else {
-          this.followRemotePage(stroke.page, lastPt, msg.client, payload.strokeId);
-        }
+        // Полотно одно: чужой штрих всегда «наш», к нему просто подводим камеру.
+        this.focusRemotePoint(lastPt, msg.client, payload.strokeId);
         break;
       }
       case 'appendPoints': {
@@ -490,9 +438,7 @@ export class NetworkManager {
           this.storage.extendBottomPoints(newPts);
           const lastPt = newPts[newPts.length - 1];
           if (lastPt) this.remoteStrokeLastPoint.set(msg.client, lastPt);
-          if (stroke.page === this.storage.currentPageId) {
-            this.focusRemotePoint(lastPt, msg.client, payload.strokeId);
-          }
+          this.focusRemotePoint(lastPt, msg.client, payload.strokeId);
         }
         break;
       }
@@ -532,13 +478,11 @@ export class NetworkManager {
           const idx = this.storage.strokes.findIndex(s => s.id === id);
           const strokeObj = {
             id: id,
-            page: data.page || this.storage.currentPageId,
             tool: data.tool,
             color: data.color,
             size: data.size,
             points: decodePoints(data.points)
           };
-          this.storage.ensurePage(strokeObj.page);
           this.storage.computeBBox(strokeObj);
           if (idx >= 0) {
             this.storage.strokes[idx] = strokeObj;
@@ -547,27 +491,23 @@ export class NetworkManager {
             this.storage.strokes.push(strokeObj);
           }
         } else if (data.type === 'note') {
-          const note = normalizeNote({ ...data, id }, this.storage.currentPageId);
-          this.storage.ensurePage(note.page);
+          const note = normalizeNote({ ...data, id });
           const idx = this.storage.notes.findIndex(n => n.id === id);
           if (idx >= 0) this.storage.notes[idx] = note;
           else this.storage.notes.push(note);
           this.notesChanged();
         } else if (data.type === 'image') {
           const idx = this.storage.images.findIndex(im => im.id === id);
+          // Растр заведёт окно загрузки, когда картинка окажется рядом с камерой.
           const img = {
             id: id,
-            page: data.page || this.storage.currentPageId,
             src: data.src,
             x: data.x,
             y: data.y,
             w: data.w,
             h: data.h,
-            img: new Image()
+            img: null
           };
-          this.storage.ensurePage(img.page);
-          img.img.onload = () => this.onMessageReceived();
-          img.img.src = data.src;
           if (idx >= 0) {
             this.storage.images[idx] = img;
             this.storage.invalidateIndex();   // длина не изменилась, объект — да
@@ -595,25 +535,20 @@ export class NetworkManager {
         const payload = msg.payload;
         const img = {
           id: payload.imageId,
-          page: payload.page || this.storage.currentPageId,
           src: payload.src,
           x: payload.x,
           y: payload.y,
           w: payload.w,
           h: payload.h,
-          img: new Image()
+          img: null
         };
-        this.storage.ensurePage(img.page);
-        img.img.onload = () => this.onMessageReceived();
-        img.img.src = payload.src;
         this.storage.images.push(img);
         this.storage.extendBottom(img);
         break;
       }
       case 'addNote': {
         const payload = msg.payload || {};
-        const note = normalizeNote({ ...payload, id: payload.noteId }, this.storage.currentPageId);
-        this.storage.ensurePage(note.page);
+        const note = normalizeNote({ ...payload, id: payload.noteId });
         if (!this.storage.noteById(note.id)) this.storage.notes.push(note);
         this.notesChanged();
         break;
@@ -628,7 +563,6 @@ export class NetworkManager {
           // пакет перетаскивания незачем.
           const next = normalizeNote({
             id: note.id,
-            page: note.page,
             x: payload.x ?? note.x,
             y: payload.y ?? note.y,
             w: payload.w ?? note.w,
@@ -643,7 +577,7 @@ export class NetworkManager {
         break;
       }
       case 'noteStroke': {
-        // Штрих в чужом окне: тот же формат, что и на листе, но координаты —
+        // Штрих в чужом окне: тот же формат, что и на полотне, но координаты —
         // внутренние координаты окна.
         const payload = msg.payload || {};
         const note = this.storage.noteById(payload.noteId);
@@ -672,21 +606,6 @@ export class NetworkManager {
             note.strokes.splice(at, 1);
             this.notesChanged();
           }
-        }
-        break;
-      }
-      case 'addPage': {
-        this.storage.insertPageAfter(msg.payload.afterId, msg.payload.pageId);
-        window.dispatchEvent(new CustomEvent('pagesChanged'));
-        break;
-      }
-      case 'deletePage': {
-        const removed = this.storage.removePage(msg.payload.pageId);
-        if (removed) {
-          this.storage.selection = null;
-          this.storage.selected = null;
-          window.dispatchEvent(new CustomEvent('pagesChanged'));
-          this.notesChanged();
         }
         break;
       }

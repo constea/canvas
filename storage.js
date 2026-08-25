@@ -1,6 +1,8 @@
 export const BOARD_W = 1024;                  // единая ширина холста (мировые px) для всех участников
-export const PAGE_H = 8000;                   // максимальная высота одной страницы (мировые px)
-export const DEFAULT_PAGE_ID = 'page-1';      // id первой/легаси-страницы (одинаков у всех клиентов)
+export const NOTE_MAX_H = 4000;               // предел высоты плавающего окна (мировые px)
+// Доска-блокнот схлопывается в одно полотно: лист встаёт под предыдущим, отступ
+// между ними читается как «здесь кончился один лист и начался другой».
+export const PAGE_FOLD_GAP = 400;             // зазор между склеенными листами (мировые px)
 export const HL_ALPHA = 0.32;                 // прозрачность маркера
 export const DEFAULT_PEN = ['#1d1d1d','#e03131','#2f9e44'];   // 3 быстрых цвета ручки
 export const DEFAULT_HL  = ['#fde047','#7f46a4'];             // 2 цвета маркера
@@ -16,6 +18,9 @@ export const MAX_EXPORT_H = 12000;            // ограничение высо
 // Штрихи и картинки листа живут в мировых координатах и уезжают вместе с
 // камерой; окно — наоборот, приклеено к ЭКРАНУ, поэтому прокрутка его не
 // двигает.
+//
+// Окно принадлежит доске целиком, а не куску полотна: полотно одно, и «уехать»
+// от окна прокруткой нельзя — оно всегда на своём месте экрана.
 //
 // Единицы измерения выбраны так, чтобы «одна и та же часть экрана» значила одно
 // и то же и на телефоне, и на мониторе:
@@ -44,8 +49,8 @@ function noteSide(v, fallback, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-// Штрих внутри окна: тот же формат, что и на листе, минус страница и bbox —
-// окно маленькое, отсечения по видимости в нём не нужно.
+// Штрих внутри окна: тот же формат, что и на полотне, минус bbox — окно
+// маленькое, отсечения по видимости в нём не нужно.
 export function normalizeNoteStroke(raw) {
   const src = raw || {};
   return {
@@ -59,16 +64,15 @@ export function normalizeNoteStroke(raw) {
 
 // Единая нормализация окна: и для снимка доски, и для сообщений по сети. Чужой
 // клиент (или старый снимок) не должен уметь прислать окно с NaN-координатой.
-export function normalizeNote(raw, fallbackPage = DEFAULT_PAGE_ID) {
+export function normalizeNote(raw) {
   const src = raw || {};
   const w = noteSide(src.w, NOTE_DEFAULT_W, NOTE_MIN_W, BOARD_W);
   return {
     id: src.id || generateUUID(),
-    page: src.page || fallbackPage,
     x: Math.max(0, Math.min(BOARD_W - w, Number(src.x) || 0)),
     y: clampUnit(src.y, 0.1),
     w,
-    h: noteSide(src.h, NOTE_DEFAULT_H, NOTE_MIN_H, PAGE_H),
+    h: noteSide(src.h, NOTE_DEFAULT_H, NOTE_MIN_H, NOTE_MAX_H),
     strokes: (src.strokes || []).map(normalizeNoteStroke)
   };
 }
@@ -96,6 +100,83 @@ export function generateUUID() {
   });
 }
 
+// --- Склейка блокнота в полотно ---
+//
+// Доски, записанные версией со страницами, приходят списком листов: у объекта
+// есть page, а его y отсчитан от верха СВОЕГО листа. Полотно одно, поэтому
+// лист встаёт под предыдущим — сдвиг равен сумме фактических высот всех листов
+// до него плюс зазор на каждый стык. Пустой лист занимает один зазор: копить
+// пустоту в тысячи px там, где никто ничего не нарисовал, незачем.
+//
+// Работаем с сырым снимком (points ещё в компактном виде [x, y]) и правим его
+// на месте: ровно те же вычисления делает сервер, когда поднимает с диска
+// старый файл доски.
+const LEGACY_PAGE_ID = 'page-1';
+
+function rawPointY(p) {
+  const y = Array.isArray(p) ? p[1] : (p && p.y);
+  return Number.isFinite(Number(y)) ? Number(y) : 0;
+}
+
+function shiftRawPoint(p, dy) {
+  if (Array.isArray(p)) p[1] = rawPointY(p) + dy;
+  else if (p) p.y = rawPointY(p) + dy;
+}
+
+export function foldPages(snapshot) {
+  const o = snapshot || {};
+  const strokes = Array.isArray(o.strokes) ? o.strokes : [];
+  const images = Array.isArray(o.images) ? o.images : [];
+
+  // Порядок листов: сначала объявленный в снимке, затем страницы, встретившиеся
+  // только у объектов, — так же их добирала прежняя ensurePage.
+  const order = [];
+  const known = new Set();
+  const track = (id) => {
+    const key = typeof id === 'string' && id ? id : LEGACY_PAGE_ID;
+    if (!known.has(key)) { known.add(key); order.push(key); }
+    return key;
+  };
+  for (const id of (Array.isArray(o.pages) ? o.pages : [])) track(id);
+  for (const s of strokes) track(s && s.page);
+  for (const im of images) track(im && im.page);
+  delete o.pages;
+  if (order.length < 2) return o;               // один лист — координаты уже полотняные
+
+  // Высота листа — самая нижняя точка его содержимого.
+  const bottom = new Map(order.map(id => [id, 0]));
+  const grow = (page, y) => { if (y > bottom.get(page)) bottom.set(page, y); };
+  for (const s of strokes) {
+    const page = track(s && s.page);
+    const size = Number(s && s.size) || 0;
+    for (const p of (s && s.points) || []) grow(page, rawPointY(p) + size);
+  }
+  for (const im of images) {
+    grow(track(im && im.page), (Number(im && im.y) || 0) + (Number(im && im.h) || 0));
+  }
+
+  const offset = new Map();
+  let top = 0;
+  for (const id of order) {
+    offset.set(id, top);
+    top += bottom.get(id) + PAGE_FOLD_GAP;
+  }
+
+  for (const s of strokes) {
+    const dy = offset.get(track(s && s.page)) || 0;
+    delete s.page;
+    if (!dy) continue;
+    for (const p of (s && s.points) || []) shiftRawPoint(p, dy);
+  }
+  for (const im of images) {
+    const dy = offset.get(track(im && im.page)) || 0;
+    delete im.page;
+    if (dy) im.y = (Number(im.y) || 0) + dy;
+  }
+  for (const n of (Array.isArray(o.notes) ? o.notes : [])) delete n.page;
+  return o;
+}
+
 export class BoardStorage {
   constructor() {
     this.boardId = (decodeURIComponent((location.hash||'').replace(/^#/,''))
@@ -110,19 +191,15 @@ export class BoardStorage {
     this.hlIdx = 0;            // выбранный быстрый цвет
     this.sizeIdx = Object.assign({}, SIZE_DEFAULT);
 
-    // Блокнот: упорядоченный список страниц. У каждого объекта есть поле page
-    // (id страницы). Одновременно отображается только currentPageId.
-    this.pages = [DEFAULT_PAGE_ID];         // порядок страниц (общий для всех клиентов)
-    this.currentPageId = DEFAULT_PAGE_ID;   // текущая видимая страница (локально у каждого)
-    // Позиция просмотра каждого листа. Как и currentPageId — величина локальная
-    // (у каждого участника свой взгляд на доску), поэтому в serialize не идёт.
-    this.pageScroll = new Map();            // pageId → cameraY
-
-    this.strokes = [];                      // [{id, page, tool, color, size, points:[{x,y}], minY, maxY}]
-    this.images  = [];                      // [{id, page, src, img, x, y, w, h}]
+    // Доска — одно непрерывное полотно: у объектов есть только мировая
+    // координата, и всё, что на нём нарисовано, лежит в одной системе координат.
+    this.strokes = [];                      // [{id, tool, color, size, points:[{x,y}], minY, maxY}]
+    // img у картинки — растр по окну загрузки (см. syncImages): вне окна
+    // остаётся только строка src.
+    this.images  = [];                      // [{id, src, img, x, y, w, h}]
     // Плавающие окна: координаты — доли экрана, а не мира (см. normalizeNote).
     // Живут в DOM поверх холста, поэтому в рендер канвы не попадают.
-    this.notes   = [];                      // [{id, page, x, y, w, h, text}]
+    this.notes   = [];                      // [{id, x, y, w, h, strokes}]
     this.contentBottom = 0;                 // нижняя граница содержимого (мир)
     this.cameraY = 0;                       // смещение «камеры» вниз (мир)
     this.selected = null;                   // выбранное изображение
@@ -139,16 +216,16 @@ export class BoardStorage {
     return id;
   }
 
+  // v: 2 — полотно вместо блокнота. Полей pages и page в снимке больше нет;
+  // снимок первой версии разбирается через foldPages (см. deserialize).
   serialize() {
     return JSON.stringify({
-      v: 1,
-      pages: this.pages.slice(),
+      v: 2,
       contentBottom: this.contentBottom,
       penColors: this.penColors,
       hlColors: this.hlColors,
       strokes: this.strokes.map(s => ({
         id: s.id || generateUUID(),
-        page: s.page || DEFAULT_PAGE_ID,
         tool: s.tool,
         color: s.color,
         size: s.size,
@@ -156,7 +233,6 @@ export class BoardStorage {
       })),
       images: this.images.map(im => ({
         id: im.id || generateUUID(),
-        page: im.page || DEFAULT_PAGE_ID,
         x: im.x,
         y: im.y,
         w: im.w,
@@ -179,60 +255,41 @@ export class BoardStorage {
     if (Array.isArray(o.penColors) && o.penColors.length) this.penColors = o.penColors.slice(0,3);
     if (Array.isArray(o.hlColors) && o.hlColors.length) this.hlColors = o.hlColors.slice(0,2);
 
-    // Список страниц. Легаси-доски (без pages) сводятся к одной странице page-1.
-    const pages = (Array.isArray(o.pages) ? o.pages : [])
-      .filter(id => typeof id === 'string' && id)
-      .slice(0, 500);
-    this.pages = pages.length ? pages.slice() : [DEFAULT_PAGE_ID];
-    // Сохраняем текущую страницу при переподключении; если её больше нет — на первую.
-    if (!this.pages.includes(this.currentPageId)) this.currentPageId = this.pages[0];
+    // Снимок доски-блокнота приводится к полотну до разбора — дальше про
+    // страницы не знает уже никто.
+    foldPages(o);
 
     this.strokes = (o.strokes || []).map(s => {
       const st = {
         id: s.id || generateUUID(),
-        page: s.page || DEFAULT_PAGE_ID,
         tool: s.tool,
         color: s.color,
         size: s.size,
         points: decodePoints(s.points)
       };
-      this.ensurePage(st.page);
       this.computeBBox(st);
       return st;
     });
 
-    this.images = (o.images || []).map(d => {
-      const im = {
-        id: d.id || generateUUID(),
-        page: d.page || DEFAULT_PAGE_ID,
-        src: d.src,
-        x: d.x,
-        y: d.y,
-        w: d.w,
-        h: d.h,
-        img: new Image()
-      };
-      this.ensurePage(im.page);
-      im.img.onload = () => {
-        if (window.dispatchEvent) {
-          window.dispatchEvent(new CustomEvent('imageLoaded'));
-        }
-      };
-      im.img.src = d.src;
-      return im;
-    });
+    // Растр картинки заводится не здесь, а окном загрузки (см. syncImages):
+    // декодировать разом всё полотно — это десятки мегабайт за содержимое,
+    // до которого ещё не доскроллили.
+    this.images = (o.images || []).map(d => ({
+      id: d.id || generateUUID(),
+      src: d.src,
+      x: d.x,
+      y: d.y,
+      w: d.w,
+      h: d.h,
+      img: null
+    }));
 
-    this.notes = (o.notes || []).map(d => {
-      const note = normalizeNote(d);
-      this.ensurePage(note.page);
-      return note;
-    });
+    this.notes = (o.notes || []).map(d => normalizeNote(d));
 
     this.selected = null;
     this.selection = null;
     this.recomputeContentBottom();
     if (window.dispatchEvent) {
-      window.dispatchEvent(new CustomEvent('pagesChanged'));
       window.dispatchEvent(new CustomEvent('notesChanged'));
     }
     return true;
@@ -247,78 +304,60 @@ export class BoardStorage {
     return at < 0 ? null : this.notes.splice(at, 1)[0];
   }
 
-  // --- Страницы (блокнот) ---
-
-  pageIndex(id) {
-    return this.pages.indexOf(id);
-  }
-
-  currentPageIndex() {
-    const i = this.pages.indexOf(this.currentPageId);
-    return i < 0 ? 0 : i;
-  }
-
-  // Гарантирует, что страница присутствует в списке (для объектов, пришедших
-  // от удалённого клиента раньше, чем сообщение addPage).
-  ensurePage(id) {
-    if (id && !this.pages.includes(id)) this.pages.push(id);
-  }
-
-  // Вставляет новую страницу после afterId (или в конец). Идемпотентно.
-  insertPageAfter(afterId, newId) {
-    if (!newId || this.pages.includes(newId)) return;
-    const at = this.pages.indexOf(afterId);
-    if (at < 0) this.pages.push(newId);
-    else this.pages.splice(at + 1, 0, newId);
-  }
-
-  // Удаляет страницу и все её объекты. Возвращает удалённые объекты (для истории).
-  removePage(id) {
-    const at = this.pages.indexOf(id);
-    if (at < 0 || this.pages.length <= 1) return null;
-    const strokes = this.strokes.filter(s => s.page === id);
-    const images = this.images.filter(im => im.page === id);
-    const notes = this.notes.filter(n => n.page === id);
-    this.strokes = this.strokes.filter(s => s.page !== id);
-    this.images = this.images.filter(im => im.page !== id);
-    this.notes = this.notes.filter(n => n.page !== id);
-    this.pages.splice(at, 1);
-    this.pageScroll.delete(id);
-    if (this.currentPageId === id) {
-      this.currentPageId = this.pages[Math.min(at, this.pages.length - 1)];
-      // Лист мог быть удалён и удалённым клиентом — камера должна встать туда,
-      // где мы остановились на соседнем листе, а не остаться в чужой позиции.
-      this.cameraY = this.recallScroll(this.currentPageId);
-    }
-    this.recomputeContentBottom();
-    return { index: at, strokes, images, notes };
-  }
-
-  // --- Позиция просмотра по листам ---
+  // --- Окно загрузки картинок ---
   //
-  // Блокнот листают туда-обратно: возврат на лист должен приводить в то место,
-  // где пользователь остановился, а не в начало страницы.
-
-  rememberScroll(pageId, y) {
-    if (!pageId || !Number.isFinite(y)) return;
-    this.pageScroll.set(pageId, Math.max(0, y));
-  }
-
-  recallScroll(pageId) {
-    const y = this.pageScroll.get(pageId);
-    return Number.isFinite(y) ? y : 0;
-  }
-
-  // Нижняя граница содержимого конкретной страницы (для экспорта).
-  pageContentBottom(id) {
-    let m = 0;
-    for (const s of this.strokes) {
-      if (s.page === id && s.maxY > m) m = s.maxY;
-    }
+  // Полотно одно и длинное: держать декодированными все картинки доски — это
+  // десятки мегабайт видеопамяти за содержимое, которого не видно. Растр живёт
+  // только у картинок в окне вокруг камеры, у остальных остаётся строка src, и
+  // возвращение в окно стоит одной загрузки.
+  //
+  // Порог выгрузки вдвое дальше порога загрузки: без этого запаса картинка,
+  // стоящая ровно на кромке окна, грузилась бы и выгружалась на каждом
+  // дрожании прокрутки.
+  syncImages(top, bottom, pad) {
+    const loadTop = top - pad, loadBottom = bottom + pad;
+    const dropTop = top - pad * 2, dropBottom = bottom + pad * 2;
     for (const im of this.images) {
-      if (im.page === id && im.y + im.h > m) m = im.y + im.h;
+      const y0 = im.y, y1 = im.y + im.h;
+      if (y1 >= loadTop && y0 <= loadBottom) this.loadImage(im);
+      else if (y1 < dropTop || y0 > dropBottom) this.unloadImage(im);
     }
-    return m;
+  }
+
+  loadImage(im) {
+    if (!im || !im.src) return null;
+    if (im.img) return im.img;
+    const img = new Image();
+    img.onload = () => {
+      if (window.dispatchEvent) window.dispatchEvent(new CustomEvent('imageLoaded'));
+    };
+    img.src = im.src;
+    im.img = img;
+    return img;
+  }
+
+  // Ссылку на элемент отпускаем — растр освобождает сборщик мусора. Присваивать
+  // src пустую строку при этом нельзя: часть браузеров понимает её как запрос к
+  // самой странице.
+  unloadImage(im) {
+    if (!im || !im.img) return;
+    if (im === this.selected) return;          // выбранную картинку сейчас держат за ручки
+    im.img.onload = null;
+    im.img = null;
+  }
+
+  // Все картинки разом — для экспорта: в PDF уходит всё полотно, а не окно.
+  loadAllImages() {
+    const pending = [];
+    for (const im of this.images) {
+      const img = this.loadImage(im);
+      if (!img || (img.complete && img.naturalWidth)) continue;
+      pending.push(new Promise(resolve => {
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+      }));
+    }
+    return Promise.all(pending);
   }
 
   extendBottom(s) {
