@@ -71,8 +71,10 @@ export class ToolManager {
   init() {
     this.buildSwatches();
     this.buildSizes();
-    this.syncTools();
+    // Быстрая панель собирается до первой синхронизации: syncTools обновляет и
+    // её кнопки, а значит к этому моменту они должны быть найдены.
     this.initQuickbar();
+    this.syncTools();
 
     // Attach canvas events
     this.overlay.addEventListener('pointerdown', (e) => this.onDown(e));
@@ -99,8 +101,9 @@ export class ToolManager {
     }, { passive: false });
 
     // Buttons
-    // Ластик есть и в toolbar, и в быстрой панели: обе кнопки помечены
-    // data-act и делают одно и то же.
+    // Ластик в toolbar включается и не выключается: выключить его — значит
+    // выбрать что-то другое, а весь выбор рядом. Переключателем он работает
+    // только в быстрой панели, где соседних инструментов нет (см. initQuickbar).
     document.querySelectorAll('[data-act="eraser"]').forEach(btn => {
       btn.addEventListener('click', () => {
         this.storage.tool = 'eraser';
@@ -286,11 +289,14 @@ export class ToolManager {
       b.setAttribute('aria-pressed', selected ? 'true' : 'false');
     });
 
-    document.querySelectorAll('[data-act="eraser"]').forEach(btn => {
+    // Подсветка — у обоих ластиков: и у постоянного в toolbar, и у
+    // переключателя в быстрой панели.
+    document.querySelectorAll('[data-act^="eraser"]').forEach(btn => {
       const selected = this.storage.tool === 'eraser';
       btn.classList.toggle('on', selected);
       btn.setAttribute('aria-pressed', selected ? 'true' : 'false');
     });
+    this.syncQuickTools();
 
     const lassoBtn = document.getElementById('lassoBtn');
     if (lassoBtn) {
@@ -360,22 +366,25 @@ export class ToolManager {
 
   // --- Быстрая панель ---
   //
-  // Плавающая палитра 3×2 поверх листа: ластик и два маркера, под ними три
-  // пера. Кнопки те же, что в toolbar (их собирает buildSwatches по
-  // data-swatches, подсвечивает syncTools), а своего здесь — только корпус:
-  // перетаскивание за ползунок с посадкой в узлы сетки и сворачивание.
+  // Плавающая полоса 3×1 поверх листа: ластик, перо, маркер. Каждая ячейка —
+  // переключатель на два положения (ластик ↔ последний инструмент, цвет 1 ↔
+  // цвет 2), поэтому рука бьёт в одну из трёх целей вслепую, не выбирая из
+  // шести. Первое нажатие по неактивному перу или маркеру только включает его
+  // с последним цветом — цвет меняет уже повторное, иначе возврат к
+  // инструменту каждый раз менял бы и цвет.
+  // Своего у панели, кроме этих кнопок, — только корпус: перетаскивание за
+  // ползунок с посадкой в узлы сетки.
 
   initQuickbar() {
     this.qbar = document.getElementById('quickbar');
     this.qgrip = document.getElementById('quickGrip');
     this.qhint = document.getElementById('quickGridHint');
-    this.qfold = document.getElementById('quickFoldBtn');
     if (!this.qbar || !this.qgrip) return;
+
+    this.initQuickTools();
 
     this.qdrag = null;
     this.qpos = this.loadQuickPos();
-    this.qbar.classList.toggle('folded', this.qpos.folded);
-    this.syncQuickFold();
     this.placeQuick();
     // Координаты есть — панель можно показывать: до этого она ждала в углу
     // прозрачной, иначе на каждой загрузке был бы прыжок с места.
@@ -385,7 +394,6 @@ export class ToolManager {
     this.qgrip.addEventListener('pointermove', (e) => this.quickMove(e));
     this.qgrip.addEventListener('pointerup', (e) => this.quickUp(e));
     this.qgrip.addEventListener('pointercancel', (e) => this.quickUp(e));
-    this.qfold?.addEventListener('click', () => this.toggleQuickbar());
 
     // Панель держится за долю поля, а не за пиксели, поэтому её пересаживают
     // при каждой смене раскладки. Одного resize мало: поле меняется и когда
@@ -397,6 +405,79 @@ export class ToolManager {
       const ro = new ResizeObserver(() => this.placeQuick());
       ro.observe(document.documentElement);
       ro.observe(this.qbar);
+    }
+  }
+
+  initQuickTools() {
+    this.qerase = document.getElementById('quickEraserBtn');
+    this.qpen = document.getElementById('quickPenBtn');
+    this.qhl = document.getElementById('quickHlBtn');
+    // Куда вернёт ластик, если его нажали первым же действием на доске.
+    this.qPrevTool = 'pen';
+
+    this.qerase?.addEventListener('click', () => this.quickToggleEraser());
+    this.qpen?.addEventListener('click', () => this.quickToggleColor('pen'));
+    this.qhl?.addEventListener('click', () => this.quickToggleColor('highlighter'));
+    // Удержание меняет сам цвет — как и на свотчах в toolbar.
+    if (this.qpen) this.attachLongPress(this.qpen, () => this.pickColor('pen', this.storage.penIdx));
+    if (this.qhl) this.attachLongPress(this.qhl, () => this.pickColor('highlighter', this.storage.hlIdx));
+  }
+
+  // Ластик и то, чем рисовали до него, меняются местами. Предыдущий инструмент
+  // помнит syncQuickTools — он видит любую смену, откуда бы она ни пришла
+  // (toolbar, горячая клавиша, сама панель).
+  quickToggleEraser() {
+    const next = this.storage.tool === 'eraser' ? this.qPrevTool : 'eraser';
+    this.storage.tool = next;
+    if (next === 'lasso') this.storage.selected = null;
+    this.syncTools();
+    this.renderer.renderOverlay();
+  }
+
+  // Неактивный инструмент нажатие только включает — с тем цветом, которым им
+  // рисовали в прошлый раз. Цвет переключает второе нажатие, уже по активной
+  // кнопке: цвет 1 ↔ цвет 2. Третий цвет ручки живёт в toolbar; из него
+  // переключение уводит на первый.
+  quickToggleColor(kind) {
+    if (this.storage.tool === kind) {
+      if (kind === 'pen') this.storage.penIdx = this.storage.penIdx === 0 ? 1 : 0;
+      else this.storage.hlIdx = this.storage.hlIdx === 0 ? 1 : 0;
+    }
+    this.storage.tool = kind;
+    this.syncTools();
+  }
+
+  // Кнопки показывают своё положение цветом и подсветкой: перо и маркер несут
+  // текущий цвет, ластик — только подсветку корпуса. Глиф ластика неизменен:
+  // кнопку находят по нему вслепую, и меняться под рукой ему нельзя.
+  syncQuickTools() {
+    if (!this.qerase && !this.qpen) return;
+    const tool = this.storage.tool;
+    if (tool !== 'eraser') this.qPrevTool = tool;
+
+    const sets = [
+      { el: this.qpen, kind: 'pen', label: 'Ручка', color: this.storage.penColors[this.storage.penIdx], i: this.storage.penIdx },
+      { el: this.qhl, kind: 'highlighter', label: 'Маркер', color: this.storage.hlColors[this.storage.hlIdx], i: this.storage.hlIdx }
+    ];
+    for (const set of sets) {
+      if (!set.el) continue;
+      set.el.querySelector('.dot')?.style.setProperty('--dot-c', set.color);
+      const selected = tool === set.kind;
+      set.el.classList.toggle('sel', selected);
+      set.el.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      set.el.setAttribute('aria-label', `${set.label}, цвет ${set.i + 1}`);
+      set.el.title = selected
+        ? `${set.label} — цвет ${set.i + 1} (нажатие — другой цвет, удержание — сменить)`
+        : `${set.label} — цвет ${set.i + 1} (удержание — сменить)`;
+    }
+
+    if (this.qerase) {
+      const erasing = tool === 'eraser';
+      const prevName = { pen: 'ручке', highlighter: 'маркеру', lasso: 'выделению', select: 'выделению' }[this.qPrevTool] || 'ручке';
+      // Иконка одна и та же, а подпись меняется: она объясняет, что сделает
+      // нажатие, и незрячему читателю это единственный источник этого знания.
+      this.qerase.setAttribute('aria-label', erasing ? `Вернуться к ${prevName}` : 'Ластик');
+      this.qerase.title = erasing ? `Вернуться к ${prevName}` : 'Ластик (E)';
     }
   }
 
@@ -465,7 +546,7 @@ export class ToolManager {
   }
 
   quickDown(e) {
-    if (e.button > 0 || e.target.closest('.quick-fold')) return;
+    if (e.button > 0) return;
     e.preventDefault();
     const box = this.qbar.getBoundingClientRect();
     this.qdrag = {
@@ -529,37 +610,16 @@ export class ToolManager {
     this.qhint?.classList.remove('show');
   }
 
-  toggleQuickbar() {
-    if (!this.qbar) return;
-    this.qpos.folded = !this.qpos.folded;
-    this.qbar.classList.toggle('folded', this.qpos.folded);
-    this.syncQuickFold();
-    // Высота панели изменилась, а с ней и вертикальное поле её хода. Ширина
-    // корпуса остаётся постоянной, чтобы сворачивание не сдвигало панель по X.
-    this.qbar.classList.add('settling');
-    this.placeQuick();
-    this.saveQuickPos();
-  }
-
-  syncQuickFold() {
-    if (!this.qfold) return;
-    const open = !this.qpos.folded;
-    this.qfold.setAttribute('aria-expanded', open ? 'true' : 'false');
-    this.qfold.setAttribute('aria-label', open ? 'Свернуть быструю панель' : 'Развернуть быструю панель');
-    this.qfold.title = open ? 'Свернуть панель (Q)' : 'Развернуть панель (Q)';
-  }
-
   // Положение панели — настройка рабочего места, а не содержимое доски,
   // поэтому живёт в localStorage отдельно от неё и не уходит соседям.
   loadQuickPos() {
-    const def = { fx: 0, fy: 0.62, folded: false };
+    const def = { fx: 0, fy: 0.62 };
     try {
       const o = JSON.parse(localStorage.getItem(QB_KEY) || 'null');
       if (!o || typeof o !== 'object') return def;
       return {
         fx: Number.isFinite(o.fx) ? Math.min(1, Math.max(0, o.fx)) : def.fx,
-        fy: Number.isFinite(o.fy) ? Math.min(1, Math.max(0, o.fy)) : def.fy,
-        folded: !!o.folded
+        fy: Number.isFinite(o.fy) ? Math.min(1, Math.max(0, o.fy)) : def.fy
       };
     } catch (_) {
       return def;
@@ -609,7 +669,6 @@ export class ToolManager {
       case 'p': this.storage.tool = 'pen'; this.syncTools(); break;
       case 'h': this.storage.tool = 'highlighter'; this.syncTools(); break;
       case 'e': this.storage.tool = 'eraser'; this.syncTools(); break;
-      case 'q': this.toggleQuickbar(); break;
       case 'l':
         this.storage.tool = 'lasso';
         this.storage.selected = null;
