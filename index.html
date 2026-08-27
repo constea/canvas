@@ -1093,7 +1093,7 @@
     left: 0;
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--qb-gap);
     padding: var(--tb-pad);
     border: 1px solid var(--line);
     /* Один ряд круглых кнопок обводится пилюлей: корпус повторяет форму того,
@@ -1128,44 +1128,45 @@
     transform: scale(1.03);
   }
 
-  /* Ползунок: единственное место, за которое панель тянут. Стоит слева от
-     кнопок и тянется на всю высоту ряда — за него берутся, не целясь.
-     Насечка идёт не прямой линией, а по дуге: корпус здесь скруглён в пилюлю,
-     и ряд точек повторяет его кромку с постоянным отступом внутрь — так
-     ползунок читается как край предмета, за который берутся, а не как
-     случайная линия поперёк него. */
+  /* Ползунок: единственное место, за которое панель тянут. Стоит справа
+     четвёртой ячейкой — тот же круг того же размера, что у кнопок, поэтому
+     полоса читается как один набор предметов, а не как три кнопки с
+     приделанной сбоку рейкой. Внутри насечка из точек, та же, что у шапки
+     плавающего окна: жест читается одинаково во всём интерфейсе. */
   .quick-grip {
     flex: none;
-    align-self: stretch;
     display: flex;
     align-items: center;
-    /* Дуга прижата к кромке, а зона нажатия шире её: тянут за всю полосу, а не
-       за точки. */
-    justify-content: flex-start;
-    width: 18px;
-    color: var(--line-strong);
+    justify-content: center;
+    width: var(--qb-cell);
+    height: var(--qb-cell);
+    border-radius: 999px;
     cursor: grab;
     touch-action: none;
+    transition: background 120ms ease;
+  }
+
+  /* Подсветка та же, что у кнопок под курсором: ячейка живая, за неё берутся. */
+  .quick-grip:hover,
+  .quickbar.dragging .quick-grip {
+    background: rgba(21, 21, 21, 0.055);
   }
 
   .quickbar.dragging .quick-grip {
     cursor: grabbing;
   }
 
-  /* Дуга задана для ряда 34px в корпусе с отступом 4px — то есть для кромки
-     радиусом 22px. Меняется высота ячейки — меняется и радиус кромки, поэтому
-     насечка масштабируется вместе с ней, а не тянется по одной оси. */
-  .quick-arc {
-    display: block;
-    /* Ширина держится за высоту в пропорции viewBox: коробка и дуга тогда
-       масштабируются одним множителем, и отступ насечки от кромки остаётся
-       той же долей радиуса, что и заложено в рисунке. */
-    width: calc(var(--qb-cell) * 14 / 34);
-    height: var(--qb-cell);
+  /* Две колонки по три точки: насечка занимает середину ячейки и оставляет по
+     краям тот же воздух, что глифы соседних кнопок. */
+  .quick-grip-dots {
+    width: 10px;
+    height: 18px;
+    background-image: radial-gradient(circle, var(--line-strong) 1px, transparent 1.15px);
+    background-size: 5px 6px;
     opacity: 0.75;
   }
 
-  /* Ряд из трёх ячеек: ластик, перо, маркер — слева направо. */
+  /* Ряд кнопок: ластик, перо, маркер — слева направо, ползунок за ними. */
   .quick-body {
     display: flex;
     gap: var(--qb-gap);
@@ -1391,9 +1392,6 @@
        инструментом, перо и маркер — со своим вторым цветом. Кнопки собирает и
        подсвечивает tools.js: разметка тут только каркас. -->
   <aside id="quickbar" class="quickbar" aria-label="Быстрая панель инструментов">
-    <div id="quickGrip" class="quick-grip" title="Перетащить панель">
-      <!--icon:quick-grip-->
-    </div>
     <div id="quickBody" class="quick-body">
       <button id="quickEraserBtn" class="btn icon quick-cell" data-act="eraser-toggle" type="button" aria-pressed="false" aria-label="Ластик" title="Ластик (E)">
         <!--icon:eraser-->
@@ -1404,6 +1402,9 @@
       <button id="quickHlBtn" class="swatch hl quick-cell" data-quick="hl" type="button" aria-pressed="false" aria-label="Маркер" title="Маркер">
         <span class="dot"></span>
       </button>
+    </div>
+    <div id="quickGrip" class="quick-grip" title="Перетащить панель">
+      <span class="quick-grip-dots" aria-hidden="true"></span>
     </div>
   </aside>
 
