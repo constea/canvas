@@ -70,10 +70,8 @@ export class VoiceManager {
     this.warnedFail = false;
     this.reloadArmedUntil = 0;
 
-    this.barEl = null;
     this.callBtn = null;
     this.micBtn = null;
-    this.levelEl = null;
     this.dotsEl = null;
     this.statusEl = null;
     this.sinks = null;
@@ -82,10 +80,8 @@ export class VoiceManager {
   // ---------- жизненный цикл ----------
 
   init() {
-    this.barEl = document.getElementById('voicebar');
     this.callBtn = document.getElementById('callBtn');
     this.micBtn = document.getElementById('micBtn');
-    this.levelEl = document.getElementById('voiceLevel');
     this.dotsEl = document.getElementById('voiceDots');
     this.statusEl = document.getElementById('voiceStatus');
     this.sinks = document.getElementById('voiceSinks') || document.body;
@@ -762,16 +758,9 @@ export class VoiceManager {
         const lv = this.muted ? 0 : this._rms(this.localMeter.an, this.localMeter.buf);
         this.micBtn.style.setProperty('--lvl', (Math.min(1, lv * 6) * 5).toFixed(2) + 'px');
       }
-      // Громкость разговора — самый громкий из собеседников. Не сумма: от суммы
-      // индикатор упирался бы в потолок втроём при обычной речи, и «громко» уже
-      // ничем не отличалось бы от «нормально». Свой голос сюда не входит — его
-      // показывает кольцо вокруг микрофона, и путать «меня слышно» с «мне
-      // слышно» нельзя.
-      let loudest = 0;
       for (const p of this.peers.values()) {
         if (!p.an) continue;
         const lv = p.muted ? 0 : this._rms(p.an, p.buf);
-        if (lv > loudest) loudest = lv;
         if (!p.dot) continue;
         if (lv > SPEAK_ON) { p.speaking = true; p.quietAt = 0; }
         else if (lv < SPEAK_OFF) {
@@ -781,9 +770,6 @@ export class VoiceManager {
         p.dot.classList.toggle('speaking', p.speaking);
         p.dot.style.setProperty('--lvl',
           (p.speaking ? 2 + Math.min(1, lv * 6) * 4 : 0).toFixed(2) + 'px');
-      }
-      if (this.levelEl) {
-        this.levelEl.style.setProperty('--lvl', Math.min(1, loudest * 6).toFixed(3));
       }
     };
     // rAF, а не setInterval: в фоновой вкладке кадры замирают сами, и разговор
@@ -795,7 +781,6 @@ export class VoiceManager {
     if (this.meterRaf) cancelAnimationFrame(this.meterRaf);
     this.meterRaf = null;
     if (this.micBtn) this.micBtn.style.removeProperty('--lvl');
-    if (this.levelEl) this.levelEl.style.removeProperty('--lvl');
   }
 
   // ---------- сторож ----------
@@ -888,10 +873,6 @@ export class VoiceManager {
       this.micBtn.title = this.inCall ? `${label} (M)` : label;
       if (!this.inCall) this.micBtn.style.removeProperty('--lvl');
     }
-    if (this.levelEl) {
-      this.levelEl.classList.toggle('on', this.inCall);
-      if (!this.inCall) this.levelEl.style.removeProperty('--lvl');
-    }
     if (this.statusEl) {
       const n = this._memberCount() || this.roster.size;
       this.statusEl.textContent = active ? `В разговоре ${n} ${pluralMembers(n)}` : '';
@@ -914,9 +895,6 @@ export class VoiceManager {
     // Свой голос — это кольцо вокруг микрофона; в ряду точек только остальные.
     const ids = this._visibleIds();
     this.dotsEl.hidden = ids.length === 0;
-    // Панели нужно знать, чем начинается её группа: у точки нет собственного
-    // «воздуха», и отступ до корпуса считается иначе, чем у кнопки.
-    this.barEl?.classList.toggle('has-dots', ids.length > 0);
     this.dotsEl.textContent = '';
     // Ряд пересобирается целиком, поэтому старые ссылки на узлы недействительны:
     // индикатор речи пишет прямо в p.dot и без сброса красил бы отцепленные узлы.

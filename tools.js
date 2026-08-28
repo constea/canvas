@@ -29,6 +29,24 @@ const QB_STEP    = 44;              // желаемое расстояние м�
 const QB_MAGNET  = 0.48;            // радиус притяжения к узлу, в долях шага
 const QB_KEY     = 'wb:quickbar';   // положение и свёрнутость (localStorage)
 
+// --- Логотип ---
+//
+// Надпись в плашке логотипа уходит от курсора: с BR_NEAR она начинает
+// подаваться в сторону, вплотную — успевает уйти на BR_RUN. Дальше нельзя:
+// по бокам от слова в плашке ровно столько места и есть, а логотип должен
+// убегать, а не разваливаться.
+const BR_NEAR    = 90;      // с какого расстояния логотип замечает курсор (экранные px)
+const BR_RUN     = 10;      // насколько далеко успевает уйти по горизонтали
+const BR_DUCK    = 3;       // и по вертикали: плашка высотой в тап-цель, выше некуда
+const BR_GAIN    = 0.7;     // долю какого смещения курсора от центра слово отыгрывает
+const BR_DASH    = 2.4;     // во сколько раз дальше слово прыгает от нажатия
+const BR_HOLD    = 180;     // сколько длится этот прыжок (мс)
+// Пружина букв: жёсткость первой и то, насколько ленивее каждая следующая.
+// Отсюда хвост — слово не переставляется плитой, а тянется за головой.
+const BR_STIFF   = 0.20;
+const BR_LAZY    = 0.018;
+const BR_DAMP    = 0.72;    // трение: без него пружина не успокоится никогда
+
 export class ToolManager {
   constructor(storage, renderer, network, history) {
     this.storage = storage;
@@ -57,6 +75,13 @@ export class ToolManager {
     this.lassoMode = null;
     this.lassoStart = null;
     this.lassoOriginal = null;
+
+    this.brandLetters = [];
+    this.brandTx = 0;
+    this.brandTy = 0;
+    this.brandRaf = null;
+    this.brandHeld = 0;
+    this.brandStill = null;
 
     this.fileInput = document.getElementById('fileInput');
     this.overlay = document.getElementById('overlay');
@@ -181,6 +206,8 @@ export class ToolManager {
 
     // Пружинистый отклик на нажатие во всех тулбарах.
     this.initPressFx();
+    // Логотип, убегающий от курсора.
+    this.initBrand();
   }
 
   // --- Swatches & Size UI Builders ---
@@ -1597,6 +1624,121 @@ export class ToolManager {
       this.springPop(inner, 0.8, 'tap-pop');
     };
     for (const bar of bars) bar.addEventListener('click', onPress, true);
+  }
+
+  // --- Логотип ---
+  //
+  // Логотип убегает от курсора. Двигается при этом только слово внутри плашки:
+  // сама плашка стоит в общем ряду с кнопками, и уезжающий чёрный
+  // прямоугольник таскал бы за собой весь ряд под пальцем.
+  // Бегство начинается на подлёте (BR_NEAR), а не по наведению: слово уходит
+  // раньше, чем курсор до него добрался, — иначе это обычный ховер, а не
+  // убегание.
+  // Пружину считаем сами, а не отдаём GSAP, как «поп» кнопок: цель здесь
+  // меняется каждый кадр вслед за курсором, и один общий цикл дешевле и
+  // предсказуемее восьми твинов, которые пришлось бы перенацеливать на каждое
+  // движение мыши.
+  initBrand() {
+    const el = document.getElementById('brand');
+    const word = el && el.querySelector('.brand-word');
+    if (!word) return;
+
+    // Слово режется на буквы здесь, а не в разметке: в исходнике логотип
+    // остаётся словом, которое можно прочитать и поправить.
+    const text = word.textContent;
+    word.textContent = '';
+    for (let i = 0; i < text.length; i++) {
+      const node = document.createElement('i');
+      node.textContent = text[i];
+      word.appendChild(node);
+      this.brandLetters.push({
+        node, x: 0, y: 0, vx: 0, vy: 0,
+        // Каждая следующая буква ленивее предыдущей, но не бесконечно: с
+        // жёсткостью около нуля хвост перестал бы возвращаться.
+        k: Math.max(0.07, BR_STIFF - i * BR_LAZY)
+      });
+    }
+
+    this.brandStill = window.matchMedia
+      ? window.matchMedia('(prefers-reduced-motion: reduce)')
+      : null;
+
+    // Плашка живёт в фиксированной полосе и переезжает только вместе с окном,
+    // поэтому её прямоугольник считается один раз и сбрасывается по resize.
+    let box = null;
+    window.addEventListener('resize', () => { box = null; });
+    const clamp = (v, m) => Math.max(-m, Math.min(m, v));
+
+    document.addEventListener('pointermove', (e) => {
+      // Прикосновение не наводят, им нажимают: убегать от пальца, который уже
+      // опустился на плашку, некуда и незачем.
+      if (e.pointerType === 'touch') return;
+      // Пока рисуют — логотипу не до игр: курсор ведёт линию, а не гуляет.
+      // Заодно тут же пропускается прыжок от нажатия (см. ниже).
+      if (e.buttons || Date.now() < this.brandHeld) return;
+      if (this.brandStill && this.brandStill.matches) return;
+      if (!box) box = el.getBoundingClientRect();
+      const dx = e.clientX - (box.left + box.width / 2);
+      const dy = e.clientY - (box.top + box.height / 2);
+      // Расстояние — до КРОМКИ плашки, а не до центра: иначе широкий логотип
+      // замечал бы курсор позже узкого.
+      const out = Math.hypot(Math.max(0, Math.abs(dx) - box.width / 2),
+                             Math.max(0, Math.abs(dy) - box.height / 2));
+      const near = 1 - Math.min(1, out / BR_NEAR);
+      // Далеко и уже дома — работы нет. Этой проверкой обработчик и живёт:
+      // pointermove на документе идёт сплошным потоком всё время рисования.
+      if (!near && !this.brandTx && !this.brandTy) return;
+      this.brandAim(clamp(-dx * BR_GAIN, BR_RUN) * near,
+                    clamp(-dy * BR_GAIN, BR_DUCK) * near);
+    }, { passive: true });
+
+    // Курсор вышел из окна — событий больше не будет, и слово так и осталось бы
+    // сдвинутым.
+    document.addEventListener('pointerleave', () => this.brandAim(0, 0));
+    window.addEventListener('blur', () => this.brandAim(0, 0));
+
+    // Ткнули в логотип — единственный случай, когда он убегает по-настоящему:
+    // рывок за кромку плашки и пружина обратно. На время рывка курсор ему не
+    // указ (brandHeld), иначе цель немедленно вернулась бы под палец.
+    el.addEventListener('pointerdown', (e) => {
+      if (this.brandStill && this.brandStill.matches) return;
+      if (!box) box = el.getBoundingClientRect();
+      this.brandHeld = Date.now() + BR_HOLD;
+      this.brandAim((e.clientX < box.left + box.width / 2 ? 1 : -1) * BR_RUN * BR_DASH, 0);
+      setTimeout(() => this.brandAim(0, 0), BR_HOLD);
+    });
+  }
+
+  // Новая цель для букв — и запуск цикла, если тот спал. Спит он всегда, когда
+  // всё стоит на месте: логотип не должен занимать кадры, пока с ним не играют.
+  brandAim(tx, ty) {
+    this.brandTx = tx;
+    this.brandTy = ty;
+    if (!this.brandRaf) this.brandRaf = requestAnimationFrame(() => this.brandStep());
+  }
+
+  brandStep() {
+    let alive = false;
+    for (const s of this.brandLetters) {
+      // Пружина: чем дальше буква от цели, тем сильнее её тянет назад, трение
+      // гасит колебание. Жёсткость у каждой своя — отсюда и хвост.
+      s.vx = (s.vx + (this.brandTx - s.x) * s.k) * BR_DAMP;
+      s.vy = (s.vy + (this.brandTy - s.y) * s.k) * BR_DAMP;
+      s.x += s.vx;
+      s.y += s.vy;
+      // Двадцатой доли пикселя не видно ни на одном экране: дошли — стоим.
+      if (Math.abs(this.brandTx - s.x) < 0.05 && Math.abs(s.vx) < 0.05 &&
+          Math.abs(this.brandTy - s.y) < 0.05 && Math.abs(s.vy) < 0.05) {
+        s.x = this.brandTx;
+        s.y = this.brandTy;
+        s.vx = 0;
+        s.vy = 0;
+      } else {
+        alive = true;
+      }
+      s.node.style.transform = `translate(${s.x.toFixed(2)}px, ${s.y.toFixed(2)}px)`;
+    }
+    this.brandRaf = alive ? requestAnimationFrame(() => this.brandStep()) : null;
   }
 
   // Единый пружинный эффект (GSAP back.out; без GSAP — CSS-класс).

@@ -16,6 +16,22 @@
      грузится до отложенного модуля, поэтому window.gsap доступен в tools.js. -->
 <script src="/gsap.min.js"></script>
 <style>
+  /* Шрифт логотипа — Syne ExtraBold (SIL Open Font License 1.1). Вшит в
+     страницу подмножеством из букв одного слова: этим шрифтом набрана ровно
+     одна надпись на всю доску, и полный набор глифов весил бы в полсотни раз
+     больше самой надписи. Файлом на сервере он не лежит и с чужого домена не
+     тянется: логотип обязан выглядеть одинаково на любой машине и рисоваться
+     в первом же кадре, до всякой сети. */
+  @font-face {
+    font-family: 'Syne';
+    font-style: normal;
+    font-weight: 800;
+    /* Шрифт уже в документе — ждать нечего, подмены системным не будет ни на
+       кадр. */
+    font-display: block;
+    src: url(data:font/woff2;base64,d09GMgABAAAAAARwAA8AAAAAB/gAAAQYAAIzMwAAAAAAAAAAAAAAAAAAAAAAAAAAGhYbgUocKgZgP1NUQVQqAFQRCAqEWIQdATYCJAMcCxAABCAFg2QHIBumBlFUUXIgviqwjWlBX4RI2UScZCLanFLkjKHkiuJivaY/m2P5i9E8l/HwOYa+n6SAqAglulYSCNMqFn4oxdRYeNQ7v7nCQZ411QIstSIrxEfwd08ASQ/QC0RV56g7ovj9D4DtuwEB2nL3ouJW4IPL6Y+F//g46Z8gfeBE9sJ5Hr21B1iCURrNQYG0OQ6YM7VjyquxS6puzU3E20cE6gFJCJVCoNa4VOztyvp2CLoaId0QpMAno+TShLvBh84rkpDUmhIaFbhOCYmkorSx8uVCRZBI1khl2zpxVYD+5QV7WvnOy71ZoQhZUSm4nASyc1mgESyT0U+S0zFhWF/yj8zHI71K3QB2wnHiAupSg2mw/Y7yejgJW8Zs8/Nn8of4ilYu/rFfYVieulqgfU0/9oPFSrJ4SAZka/MwSCXI5CBn0DVc60C9akmxZQSCMOZLgnD/zGy32grLCtFSvKjpdlWgEbX4CKIfgAIIWZKEGG8J9ikdzSHpPhPL7oL1i2FZ9xzqj6Y7AjbcZvy6exfQtD/PjfgRis1sFgVjgMXjMR9DnA6u0RZ/tt/0LQxroZdwoKHazV4GxEkbPWh4ejoNuYPdzr0JbtFd/uvp25ELB9PosQzDnNYDfL8Nl81z0dDdlu67VcBO+vYdhs6+QKOfObAR8+cOTp36s+j48tdJ22s7phsMHbO2N74WLD/+q3zqbO4Q98S3qfGuaVuTasqy02qKtiZOc02J/XtrA51784eJ1s5hYm+Oc9yR4kGyMTdj0FS+VLyufkpYvUapqtdMCa03I+mZouSh6L6hbx9ewCo7ckH9/uom37p+5rliOvPSLE2fv92oayg0Zxqjm/hIZIq2uKdkngb+NW69nWbFBgas+O30rVtuplvw/a9asJtpm5fVGmJSpVKRIbau1hxbKpOmmmNAdvTx/cbw2hwHxz+0vovdUIMHNCWslOkLim3iBcH1U7am1nXwPPvP1JqqfBUd/OWA157r9u6OzdDl9FfuTyZNC2K7lC9eeOrBWH8W1/S/f7H73gdAIC0uFh7tYoaC8/9X5/wXflYvCQT8qSjv/P/zmak2cI6gUgLBux+p/k5gHpeNABYcUhV/nDyx/JMR7Y3p/QwvqQXp1qgQqPJeC1MiDJcVgRrXOKLU4BNwJfQ7rSSN/ijZgk+9haZU6C1JrtRftiYq1MfeE6JWa8NQBoEaD2djYUXiS6WXIgdfOysTvjbjud3YDIewN7+BfkAJCskKgSPwyZX5OBKKkEtHx8KG5DRilJYBwkVnFMLNDkHBabgg3IxMdMzNJsyeDBISQIN0gaKTzUYYmCjkHVZhHBJuRCmEk1ErU/NRB8ClrvbpzdbL06hJowp5yzBNCbTTNjW/TVQPv0jrA9Eu1wNtQohzwNyLXR0=) format('woff2');
+  }
+
   :root {
     color-scheme: light;
     /* Два материала интерфейса: серый «стол» — и всё белое, что на нём лежит.
@@ -37,6 +53,9 @@
     --accent-line: rgba(57, 77, 254, 0.25);
     --danger: #cf2e2e;
     --ui-strong: #151515;
+    /* Чёрный логотипа — тот же, что на плашке иконки приложения (favicon.svg):
+       во вкладке браузера и в углу доски лежит один и тот же предмет. */
+    --brand-ink: #0c0f1a;
     --radius: 8px;
     --control: 32px;
     /* Шкала отступов тулбаров.
@@ -634,25 +653,22 @@
     -webkit-backdrop-filter: blur(18px) saturate(140%);
   }
 
-  /* Когда слева в группе встают точки участников, «воздуха» внутри первой
-     ячейки нет (точка — голый кружок 10px, а не кнопка 32px), и отступ до
-     корпуса нужно отмерять от самой точки. Класс ставит voice.js: у :has()
-     поддержка неровная, а состояние тут и так проходит через JS. */
-  /* --tb-slack-end у .group выведен через var(--tb-slack), поэтому обнуление
-     одного края уносило и второй: справа у панели по-прежнему стоит кнопка со
-     своим «воздухом», и её отступ надо вернуть явно. */
-  .voicebar.has-dots .group { --tb-slack: 0px; --tb-slack-end: var(--tb-slack-icon); }
-
   /* Что именно уступает место, когда его не хватает.
      Кнопки не сжимаются никогда, ряд точек — сколько угодно. Содержимое
-     прижато к правому краю, а лишнее обрезается: значит вылезает и пропадает
-     ряд точек СЛЕВА, а микрофон и трубка справа остаются целыми и нажимаемыми.
-     Без justify-content: flex-end обрезалось бы наоборот — по правому краю,
-     то есть ровно те кнопки, ради которых панель и существует. */
+     прижато к правому краю, а лишнее обрезается: значит за кромку уходит
+     сначала ряд точек и логотип СЛЕВА, а микрофон и трубка справа остаются
+     целыми и нажимаемыми. Без justify-content: flex-end обрезалось бы
+     наоборот — по правому краю, то есть ровно те кнопки, ради которых панель
+     и существует. */
   .voicebar .group {
     min-width: 0;
     overflow: hidden;
     justify-content: flex-end;
+    /* Слева в группе стоит логотип — сплошная плашка, а не глиф внутри
+       тап-цели: «воздуха» он с собой не приносит, и отмерять отступ до корпуса
+       не от чего. Поля у плашки со всех четырёх сторон одни и те же --tb-pad,
+       как у кнопки, поэтому собственный отступ группы слева обнуляется. */
+    padding-inline-start: 0;
   }
 
   .voicebar .btn {
@@ -719,70 +735,66 @@
     pointer-events: none;
   }
 
-  /* Крайний слева элемент панели — уровень громкости разговора: насколько
-     громко сейчас звучат остальные. Роль у него ровно одна и только во время
-     звонка; до звонка показывать нечего, и он стоит затемнённой ровной
-     дорожкой (см. opacity ниже).
-     Ширина — не иконочная ячейка, а полоса в девять делений: четыре палочки
-     размером с иконку читались как непонятное украшение у самого края, а
-     дорожка такой длины сама называет себя индикатором ещё до того, как
-     оживёт. Высота ячейки прежняя (var(--control)), поэтому ряд не дёргается,
-     когда индикатор оживает.
-     Высота полосок ведётся из JS через --lvl (0..1) покадрово: как и кольцо
-     микрофона, непрерывный сигнал в CSS-переход не укладывается, а короткий
-     transition только сглаживает ступеньки.
-     Полоски разной чувствительности (--k) — тихая речь шевелит центральные,
-     громкая поднимает все: иначе индикатор работал бы как лампочка «есть звук».
-     Указатель сквозь него проходит: это показание, а не управление. */
-  .voice-level {
-    /* Ширина по содержимому плюс собственный «воздух» до корпуса панели: у
-       группы отступ края выведен из --tb-slack (сколько воздуха деталь
-       приносит с собой), и padding здесь играет ту же роль, что поля внутри
-       иконочной кнопки. */
-    padding-inline: var(--tb-slack-icon);
-    height: var(--control);
+  /* Крайний слева элемент панели — логотип: имя продукта у самой кромки листа,
+     первым во всей верхней полосе. Единственная деталь интерфейса, которая
+     ничего не делает, поэтому и стоит до всех кнопок, а не между ними.
+     Раньше здесь стоял индикатор громкости разговора — дорожка в девять
+     делений; логотип занял его место буква в букву: та же высота, тот же край,
+     та же роль «показания, а не управления».
+     Плашка — тот же чёрный, что у иконки приложения: во вкладке браузера и в
+     углу доски лежит один и тот же предмет. Высота ровно в тап-цель
+     (--control), поэтому ряд не становится выше, а поля плашки до корпуса
+     панели со всех сторон равны --tb-pad — как у кнопки.
+     Надпись внутри убегает от курсора (tools.js::initBrand); сама плашка при
+     этом стоит намертво: уезжающий чёрный прямоугольник таскал бы за собой
+     весь ряд под пальцем. */
+  .brand {
+    /* Не сжимается никогда: сплюснутый логотип хуже обрезанного, а обрезать
+       его на совсем узком экране панель умеет и сама (overflow у .group). */
     flex: 0 0 auto;
+    height: var(--control);
+    padding-inline: 13px;
+    /* До соседа справа — столько же чернил, сколько между глифами соседних
+       кнопок: у иконки половина этого зазора спрятана внутри тап-цели, а у
+       плашки чернила доходят до самого края — недостающую половину и
+       добавляем. */
+    margin-inline-end: var(--tb-slack-icon);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 3px;
-    /* До звонка показывать нечего — та же степень затемнения, что у
-       отключённой кнопки (.btn:disabled), чтобы «неактивно» читалось одинаково
-       у всех элементов панели. */
-    opacity: 0.34;
-    transition: opacity 160ms ease;
-    pointer-events: none;
-  }
-
-  /* Класс ставит voice.js по факту участия в разговоре: индикатор в полную силу
-     ровно тогда, когда ему есть что показывать. */
-  .voice-level.on {
-    opacity: 1;
-  }
-
-  .voice-level i {
-    display: block;
-    width: 3px;
     border-radius: 999px;
-    background: linear-gradient(180deg, #34D8B4, #10A37F);
-    /* Минимум 4px: молчащий разговор — это ровная дорожка точек, а не пустое
-       место (пустое место нельзя отличить от сломанного индикатора). */
-    height: calc(4px + var(--lvl, 0) * var(--k) * 15px);
-    transition: height 90ms linear;
+    background: var(--brand-ink);
+    color: var(--paper);
+    /* Убегая, слово ныряет за кромку плашки, а не выезжает наружу: обрезает
+       его сама плашка, и «убежало» читается как убежало, а не как
+       разъехавшаяся вёрстка. */
+    overflow: hidden;
+    /* Предмет, а не текст: ни выделения протяжкой, ни курсора-каретки. */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
   }
 
-  /* Профиль чувствительности намеренно неровный и несимметричный: ровная горка
-     читалась бы как заранее нарисованная картинка, а разнобой — как живой
-     звук. Самые чуткие деления — ближе к середине дорожки. */
-  .voice-level i:nth-child(1) { --k: 0.34; }
-  .voice-level i:nth-child(2) { --k: 0.62; }
-  .voice-level i:nth-child(3) { --k: 0.48; }
-  .voice-level i:nth-child(4) { --k: 0.86; }
-  .voice-level i:nth-child(5) { --k: 1; }
-  .voice-level i:nth-child(6) { --k: 0.7; }
-  .voice-level i:nth-child(7) { --k: 0.92; }
-  .voice-level i:nth-child(8) { --k: 0.55; }
-  .voice-level i:nth-child(9) { --k: 0.38; }
+  .brand-word {
+    display: block;
+    font-family: 'Syne', ui-sans-serif, system-ui, sans-serif;
+    font-weight: 800;
+    font-size: 14px;
+    /* Строка ровно в высоту букв: по вертикали надпись ставит flex плашки, а
+       не унаследованный интерлиньяж. */
+    line-height: 1;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+  }
+
+  /* Слово режет на буквы tools.js: каждая уходит от курсора со своей задержкой,
+     и надпись убегает не плитой, а тянется хвостом. inline-block обязателен —
+     к строчному боксу transform не применяется вовсе. */
+  .brand-word i {
+    display: inline-block;
+    font-style: normal;
+    will-change: transform;
+  }
 
   /* Разговор идёт, а меня в нём нет: медленный ореол — приглашение, не тревога. */
   @keyframes voice-live {
@@ -847,7 +859,6 @@
     }
 
     .voice-dot,
-    .voice-level i,
     .voice-mic .voice-ring,
     .size,
     .size::before {
@@ -1358,19 +1369,18 @@
        панель читается как часть одного набора, а не как чужая деталь. -->
   <nav id="voicebar" class="voicebar" aria-label="Разговор">
     <div class="group" aria-label="Управление разговором">
+      <!-- Логотип. Стоит там же, где раньше стоял индикатор громкости, — у
+           левой кромки листа, первым во всей верхней полосе. Слово разрезает
+           на буквы tools.js, поэтому интерфейсу логотип отдаётся одной
+           картинкой с именем (role="img"), а не восемью буквами подряд. -->
+      <div id="brand" class="brand" role="img" aria-label="onCanvas">
+        <span class="brand-word">onCanvas</span>
+      </div>
       <!-- Точки участников разговора: цвет тот же, что у курсора этого человека,
            — кто рисует и кого слышно читается одним взглядом. Живой регион здесь
            был бы невыносим (пульс на каждое слово), поэтому изменения состава
            уходят в #voiceStatus. -->
       <div id="voiceDots" class="voice-dots" aria-hidden="true" hidden></div>
-      <!-- Уровень громкости разговора: насколько громко сейчас звучат остальные.
-           Стоит первым и никуда не исчезает — панель разговора имеет один и тот
-           же вид до звонка и во время него, а «затемнён» читается как «пока
-           нечего показывать», в отличие от появляющейся из ниоткуда кнопки,
-           которая на каждый звонок заново перекраивает ряд под пальцем. -->
-      <div id="voiceLevel" class="voice-level" aria-hidden="true">
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-      </div>
       <button id="micBtn" class="btn icon voice-mic" type="button" aria-pressed="false"
               aria-label="Выключить микрофон" title="Выключить микрофон (M)" disabled>
         <span class="voice-ring" aria-hidden="true"></span>
