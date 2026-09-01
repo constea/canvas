@@ -57,6 +57,9 @@ export class ToolManager {
     this.lassoMode = null;
     this.lassoStart = null;
     this.lassoOriginal = null;
+    this.lassoDx = 0;
+    this.lassoDy = 0;
+    this.movingLayer = false;   // выделение едет отдельным слоем (см. beginMovingLayer)
 
     this.fileInput = document.getElementById('fileInput');
     this.overlay = document.getElementById('overlay');
@@ -1052,7 +1055,10 @@ export class ToolManager {
         this.lassoPid = e.pointerId;
         this.lassoMode = 'move';
         this.lassoStart = world;
+        this.lassoDx = 0;
+        this.lassoDy = 0;
         this.lassoOriginal = this.snapshotSelection(this.storage.selection);
+        this.beginMovingLayer(bounds);
         return;
       }
     }
@@ -1074,20 +1080,36 @@ export class ToolManager {
     this.renderer.renderOverlay();
   }
 
-  moveLasso(e) {
-    const world = this.pointerWorld(e);
-    if (this.lassoMode === 'draw') {
-      const path = this.renderer.lassoPath;
-      const last = path[path.length - 1];
-      if (!last || Math.hypot(world.x - last.x, world.y - last.y) >= 2 / this.renderer.scale) {
-        path.push(world);
-        this.renderer.renderOverlay();
-      }
-      return;
-    }
-    if (this.lassoMode !== 'move' || !this.lassoOriginal) return;
-    const dx = world.x - this.lassoStart.x;
-    const dy = world.y - this.lassoStart.y;
+  // Перетаскивание выделения на каждое событие указателя двигало точки всех
+  // выбранных штрихов и звало fullRender: полоса чернил растеризовалась заново,
+  // а у сдвинутых штрихов вдобавок пересчитывались контуры пера — сдвиг точек
+  // обесценивает их кэш (см. inkSigMatches). Событий приходит больше, чем
+  // кадров, поэтому вся эта работа повторялась по нескольку раз за кадр; на
+  // планшете, где процессор слабее, это и есть рывки.
+  //
+  // Точки теперь стоят на месте до конца жеста: выбранные штрихи исключаются из
+  // полосы и рисуются отдельным слоем со сдвигом холста, а кадр планируется на
+  // animation frame. Кадр стоит blit полосы плюс сами эти штрихи с готовыми
+  // контурами. В конце жеста сдвиг записывается в точки один раз.
+  //
+  // Ластик — исключение: его штрихи стирают то, что под ними, и вне общего
+  // порядка рисования дали бы неверную картинку. Для такого выделения остаётся
+  // прежний путь со сдвигом точек, но уже раз в кадр, а не раз в событие.
+  beginMovingLayer(bounds) {
+    const strokes = this.storage.selection.strokes || [];
+    this.movingLayer = !strokes.some(s => s.tool === 'eraser');
+    if (!this.movingLayer) return;
+    this.renderer.movingSet = {
+      strokes: new Set(strokes),
+      images: new Set(this.storage.selection.images || []),
+      bounds,
+      dx: 0,
+      dy: 0
+    };
+    this.renderer.fullRender();      // пересобрать полосу без «уезжающих» штрихов
+  }
+
+  applyLassoOffset(dx, dy) {
     for (const item of this.lassoOriginal) {
       if (item.objectType === 'stroke') {
         item.object.points = item.before.points.map(p => ({ ...p, x: p.x + dx, y: p.y + dy }));
@@ -1097,7 +1119,45 @@ export class ToolManager {
         item.object.y = item.before.y + dy;
       }
     }
-    this.renderer.fullRender();
+  }
+
+  moveLasso(e) {
+    if (this.lassoMode === 'draw') {
+      // Контур собирается из коалесцированных событий — быстрый росчерк не
+      // срезается углами, — а перерисовка планируется на кадр. Раньше оверлей
+      // перерисовывался синхронно на каждое событие: холст очищался во весь DPR,
+      // и растущий пунктирный контур заливался и обводился заново по нескольку
+      // раз за кадр.
+      const raw = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+      const evs = (raw && raw.length) ? raw : [e];             // список пуст у синтетических событий
+      const r = this.overlay.getBoundingClientRect();
+      const k = this.renderer.scale;
+      const minStep = 2 / k;                                   // те же 2 экранных px
+      const path = this.renderer.lassoPath;
+      let added = false;
+      for (const ev of evs) {
+        const x = (ev.clientX - r.left) / k;
+        const y = (ev.clientY - r.top) / k + this.storage.cameraY;
+        const last = path[path.length - 1];
+        if (last && Math.hypot(x - last.x, y - last.y) < minStep) continue;
+        path.push({ x, y });
+        added = true;
+      }
+      if (added) this.renderer.scheduleOverlay();
+      return;
+    }
+    if (this.lassoMode !== 'move' || !this.lassoOriginal) return;
+    const world = this.pointerWorld(e);
+    this.lassoDx = world.x - this.lassoStart.x;
+    this.lassoDy = world.y - this.lassoStart.y;
+    if (this.movingLayer) {
+      this.renderer.movingSet.dx = this.lassoDx;
+      this.renderer.movingSet.dy = this.lassoDy;
+      this.renderer.scheduleMoveRender();
+      return;
+    }
+    this.applyLassoOffset(this.lassoDx, this.lassoDy);
+    this.renderer.scheduleRender();
   }
 
   endLasso() {
@@ -1135,6 +1195,7 @@ export class ToolManager {
       }
       this.renderer.lassoPath = null;
     } else if (this.lassoMode === 'move' && this.lassoOriginal) {
+      if (this.movingLayer) this.applyLassoOffset(this.lassoDx, this.lassoDy);
       const items = this.lassoOriginal.map(item => ({
         id: item.object.id,
         objectType: item.objectType,
@@ -1156,6 +1217,10 @@ export class ToolManager {
     this.lassoPid = null;
     this.lassoStart = null;
     this.lassoOriginal = null;
+    this.lassoDx = 0;
+    this.lassoDy = 0;
+    this.movingLayer = false;
+    this.renderer.movingSet = null;
     this.renderer.fullRender();
   }
 

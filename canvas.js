@@ -65,6 +65,7 @@ export class CanvasRenderer {
     this.activeStroke = null;   // штрих в процессе рисования (доносится поверх кэша)
     this.inkPaths = new WeakMap(); // готовые контуры штрихов (мировые координаты)
     this.lassoPath = null;      // активный контур лассо в мировых координатах
+    this.movingSet = null;      // выделение, которое сейчас тащат (см. drawMovingStrokes)
     this.hoverImage = null;     // изображение под курсором мыши: подсказка «за это можно взять»
     this.remoteCursors = new Map();
     this._raf = null;           // id запланированного кадра рендера
@@ -494,10 +495,14 @@ export class CanvasRenderer {
     ctx.clearRect(0, 0, this.back.width, this.back.height);
     ctx.restore();
 
+    const moving = this.movingSet;
     for (const im of this.storage.images) {
       if (!im.img || !im.img.complete || !im.img.naturalWidth) continue;      // вне окна или ещё грузится
-      if (im.y + im.h < camY || im.y > camY + this.worldH) continue;          // culling
-      ctx.drawImage(im.img, im.x, im.y - camY, im.w, im.h);
+      const off = moving && moving.images.has(im);
+      const x = off ? im.x + moving.dx : im.x;
+      const y = off ? im.y + moving.dy : im.y;
+      if (y + im.h < camY || y > camY + this.worldH) continue;                // culling
+      ctx.drawImage(im.img, x, y - camY, im.w, im.h);
     }
   }
 
@@ -524,7 +529,9 @@ export class CanvasRenderer {
     ctx.clearRect(0, 0, this.inkCache.width, this.inkCache.height);
     const k = this.DPR * this.scale;
     ctx.setTransform(k, 0, 0, k, 0, 0);
+    const moving = this.movingSet;
     for (const s of this.storage.strokes) {
+      if (moving && moving.strokes.has(s)) continue;   // едет отдельным слоем
       if (this.strokeInBand(s)) this.drawStrokeTo(ctx, s, this.bandY);
     }
     this.bandValid = true;
@@ -558,6 +565,7 @@ export class CanvasRenderer {
     if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
     if (!this.bandCoversCamera()) { this.fullRender(); return; }
     this.blitInk();
+    this.drawMovingStrokes(this.inkCtx, this.storage.cameraY);
     if (this.activeStroke) this.drawStrokeTo(this.inkCtx, this.activeStroke, this.storage.cameraY);
     this.renderBack();
     this.renderOverlay();
@@ -571,8 +579,43 @@ export class CanvasRenderer {
     });
   }
 
+  // Штрихи, которые сейчас тащат лассо. Их точки до конца жеста не трогаются:
+  // сдвиг делает трансформация холста, поэтому контуры пера остаются в кэше
+  // (кэш обесценивается как раз сдвигом точек, см. inkSigMatches). В полосу они
+  // не запечены — она собрана без них, — и рисуются поверх готового растра.
+  drawMovingStrokes(ctx, camY) {
+    const m = this.movingSet;
+    if (!m || !m.strokes.size) return;
+    ctx.save();
+    ctx.translate(m.dx, m.dy);
+    for (const s of m.strokes) this.drawStrokeTo(ctx, s, camY);
+    ctx.restore();
+  }
+
+  // Кадр, в котором изменился ТОЛЬКО сдвиг перетаскиваемого выделения: полоса
+  // уже собрана без него, поэтому кадр стоит один blit плюс сами эти штрихи —
+  // вместо повторной растеризации всей полосы на каждое движение указателя.
+  moveRender() {
+    if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
+    if (!this.movingSet || !this.bandCoversCamera()) { this.fullRender(); return; }
+    this.blitInk();
+    this.drawMovingStrokes(this.inkCtx, this.storage.cameraY);
+    if (this.activeStroke) this.drawStrokeTo(this.inkCtx, this.activeStroke, this.storage.cameraY);
+    this.renderBack();
+    this.renderOverlay();
+  }
+
+  scheduleMoveRender() {
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => {
+      this._raf = null;
+      this.moveRender();
+    });
+  }
+
   renderActive(active) {
     this.blitInk();
+    this.drawMovingStrokes(this.inkCtx, this.storage.cameraY);
     if (active) this.drawStrokeTo(this.inkCtx, active, this.storage.cameraY);
   }
 
@@ -603,7 +646,7 @@ export class CanvasRenderer {
       ctx.restore();
     }
 
-    const groupBounds = this.selectionBounds(this.storage.selection);
+    const groupBounds = this.overlayBounds();
     if (groupBounds) {
       const k = this.scale;
       const x = groupBounds.x * k;
@@ -687,6 +730,15 @@ export class CanvasRenderer {
     }
     this.drawRemoteCursors(this.ovCtx);
     this.updateScrollbar();
+  }
+
+  // Габариты выделения для оверлея. Пока выделение тащат, точки штрихов стоят
+  // на месте, и рамке достаточно сдвига слоя: иначе каждый кадр перебирал бы
+  // все точки выделения (при сотне штрихов это тысячи точек на кадр).
+  overlayBounds() {
+    const m = this.movingSet;
+    if (!m || !m.bounds) return this.selectionBounds(this.storage.selection);
+    return { x: m.bounds.x + m.dx, y: m.bounds.y + m.dy, w: m.bounds.w, h: m.bounds.h };
   }
 
   selectionBounds(selection) {
@@ -787,6 +839,7 @@ export class CanvasRenderer {
     this.clampCamera();
     this.rebuildInkCache();
     this.blitInk();
+    this.drawMovingStrokes(this.inkCtx, this.storage.cameraY);
     if (this.activeStroke) this.drawStrokeTo(this.inkCtx, this.activeStroke, this.storage.cameraY);
     this.renderBack();
     this.renderOverlay();
