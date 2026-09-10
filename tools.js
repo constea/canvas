@@ -484,27 +484,6 @@ export class ToolManager {
     }
   }
 
-  // Поле, по которому ходит панель: по бокам — кромки листа (справа её держит
-  // toolbar), сверху — под toolbar, снизу — нижнее поле окна. Меряем по самим
-  // панелям, а не повторяем расчёты CSS: поле тогда само подстраивается под их
-  // размер, а быстрая палитра не наезжает на них сверху.
-  // Верхняя кромка панели, стоящей внизу окна. Сейчас разговор живёт наверху
-  // при любой ширине, и проверка вырождается в «панелей внизу нет» — но поле
-  // по-прежнему меряется по факту, а не по вере в текущую раскладку: ниже этой
-  // черты панель класть нельзя, она накроет чужие кнопки и заберёт себе
-  // касания по ним.
-  bottomChromeTop() {
-    let top = window.innerHeight;
-    const el = document.getElementById('voicebar');
-    if (el) {
-      const r = el.getBoundingClientRect();
-      // Панель считается нижней, только если она и правда внизу: наверху она
-      // ограничивает поле сверху (через y0), а не снизу.
-      if (r.height && r.top > window.innerHeight / 2) top = Math.min(top, r.top);
-    }
-    return top;
-  }
-
   quickField() {
     const w = this.qbar.offsetWidth;
     const h = this.qbar.offsetHeight;
@@ -512,8 +491,7 @@ export class ToolManager {
     const x0 = 8;
     const y0 = (tb ? tb.bottom : 44) + 6;
     const availW = Math.max(0, (tb ? tb.right : window.innerWidth - 8) - w - x0);
-    // Снизу поле упирается не в край окна, а в нижние панели.
-    const availH = Math.max(0, Math.min(window.innerHeight - 10, this.bottomChromeTop() - 6) - h - y0);
+    const availH = Math.max(0, window.innerHeight - 10 - h - y0);
     // Узлов тем больше, чем больше места, но не меньше двух на ось: даже на
     // крошечном окне у панели остаётся выбор между краями.
     const cols = Math.max(2, Math.round(availW / QB_STEP) + 1);
@@ -1646,15 +1624,11 @@ export class ToolManager {
   initPressFx() {
     const bars = [
       document.querySelector('.toolbar'),
-      document.getElementById('quickbar'),
-      document.getElementById('voicebar')
+      document.getElementById('quickbar')
     ].filter(Boolean);
     const onPress = (e) => {
       const btn = e.target.closest('.btn, .swatch, .presence');
       if (!btn || btn.disabled) return;
-      // У кнопок разговора две иконки в одной ячейке, и скрыта та, что не по
-      // состоянию: берём первую ВИДИМУЮ, иначе пружина досталась бы display:none
-      // и нажатие выглядело бы мёртвым. getClientRects() у скрытой пуст.
       let inner = btn;
       for (const el of btn.querySelectorAll('.m-icon, .dot')) {
         if (el.getClientRects().length) { inner = el; break; }

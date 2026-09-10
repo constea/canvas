@@ -382,13 +382,9 @@ export class NotesManager {
     el.classList.add('dragging');
   }
 
-  // Нижняя граница поля окон в координатах слоя. На узком экране внизу стоят
-  // панель страниц и панель разговора: окно, доехавшее под них, теряет уголок
-  // изменения размера — касание по нему достаётся кнопке чужой панели, а там
-  // «удалить страницу» и «положить трубку».
+  // Нижняя граница поля окон в координатах слоя.
   floorFor(r) {
-    const chrome = this.tools?.bottomChromeTop ? this.tools.bottomChromeTop() : window.innerHeight;
-    return Math.max(GUTTER, Math.min(r.height, chrome - 6 - r.top));
+    return Math.max(GUTTER, Math.min(r.height, window.innerHeight - 6 - r.top));
   }
 
   moveDrag(e, el) {
