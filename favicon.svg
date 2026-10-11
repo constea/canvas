@@ -1,12 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" rx="50" fill="#0C0F1A"/>
-  <!-- ξ -->
-  <text x="44" y="72" text-anchor="middle"
-        font-family="Georgia,'DejaVu Serif',serif"
-font-style="italic" font-size="58" fill="#FFFFFF">&#950;</text>
-  <!-- superscript 2 -->
-  <text x="74" y="38" text-anchor="middle"
-        font-family="Georgia,'DejaVu Serif',serif"
-        font-size="26" fill="#FFFFFF">2</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1224 1224" width="1224" height="1224">
+  <circle cx="612" cy="612" r="609.75" fill="#555557" stroke="#343436" stroke-width="4.5"/>
+  <path fill="#FFFFFF" d="M715.8 143.6A6 6 0 0 0 706 143.6L581.4 319.8L316 420.2A6 6 0 0 0 314.3 430.5L591.4 655.3L320.9 782.6A6 6 0 0 0 317.6 789L348.6 984.8A6 6 0 0 0 354.5 989.8L847.9 988.4A6 6 0 0 0 853.9 981.6L832.6 822.6A6 6 0 0 0 824.4 817.9L492.1 952.1L445.7 817.4L770.2 632.7A6 6 0 0 0 769.7 622L492.8 492.9L847.3 342.3A6 6 0 0 0 849.8 333.3Z"/>
 </svg>
